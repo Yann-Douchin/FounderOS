@@ -35,7 +35,7 @@ class AgentBridgeTests(unittest.TestCase):
         )
         self.assertEqual(tool, "Bash")
         self.assertIn("Déployer", summary)
-        self.assertIn("[secret masqué]", summary)
+        self.assertIn("[secret redacted]", summary)
         self.assertNotIn("supersecret", summary)
 
     def test_request_decision_round_trip_is_atomic_and_ephemeral(self) -> None:
@@ -104,7 +104,7 @@ class AgentBridgeTests(unittest.TestCase):
             events = connector.poll(NOW)
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0].kind, "agent_usage")
-            self.assertEqual(events[0].title, "Utilisation Claude")
+            self.assertEqual(events[0].title, "Claude usage")
             self.assertEqual(events[0].metadata["windows"][1]["label"], "SEM")
 
     def test_codex_rate_limits_use_official_primary_and_secondary_windows(self) -> None:

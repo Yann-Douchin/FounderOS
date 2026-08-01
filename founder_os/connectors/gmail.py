@@ -37,7 +37,7 @@ class GmailConnector(Connector):
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         super().__init__(config)
-        self.token_provider = GoogleAccessTokenProvider(config)
+        self.token_provider = GoogleAccessTokenProvider(config, secrets=self.secrets)
         self.query = str(config.get("query", "is:unread newer_than:2d"))
         self.vip_senders = {str(value).casefold() for value in config.get("vip_senders", [])}
         self.action_keywords = self._keywords(config.get("action_keywords", DEFAULT_ACTION_KEYWORDS))
@@ -97,7 +97,7 @@ class GmailConnector(Connector):
         query: Mapping[str, Any],
         deadline: float,
     ) -> dict[str, Any]:
-        token = self.token_provider.token(now)
+        token = self.token_provider.token(now, deadline_monotonic=deadline)
         timeout = self._remaining_timeout(deadline)
         try:
             return request_json(
@@ -106,12 +106,13 @@ class GmailConnector(Connector):
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=timeout,
                 retries=0,
+                deadline_monotonic=deadline,
             )
         except ConnectorHTTPError as exc:
             if exc.status_code != 401 or not self.token_provider.refreshable:
                 raise
         self.token_provider.invalidate()
-        token = self.token_provider.token(now)
+        token = self.token_provider.token(now, deadline_monotonic=deadline)
         timeout = self._remaining_timeout(deadline)
         return request_json(
             url,
@@ -119,6 +120,7 @@ class GmailConnector(Connector):
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
             retries=0,
+            deadline_monotonic=deadline,
         )
 
     def _remaining_timeout(self, deadline: float) -> float:
@@ -135,9 +137,9 @@ class GmailConnector(Connector):
             str(item.get("name", "")).casefold(): str(item.get("value", ""))
             for item in ((message.get("payload") or {}).get("headers") or [])
         }
-        subject = " ".join((headers.get("subject") or "Sans objet").split())
+        subject = " ".join((headers.get("subject") or "No subject").split())
         sender_name, sender_email = parseaddr(headers.get("from", ""))
-        sender_label = sender_name or sender_email or "Expéditeur inconnu"
+        sender_label = sender_name or sender_email or "Unknown sender"
         sender_folded = sender_email.casefold()
         vip = self._is_vip_sender(sender_folded)
         labels = set(message.get("labelIds") or [])

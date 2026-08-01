@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from founder_os.config import ConfigError, load_config
+from founder_os.secrets import MemorySecretStore, SecretResolver
 
 
 class ProductionConfigTests(unittest.TestCase):
@@ -52,6 +53,20 @@ class ProductionConfigTests(unittest.TestCase):
             overrides["display"]["allow_insecure_http"] = True
             config = load_config(overrides=overrides)
             self.assertEqual(config["runtime"]["environment"], "production")
+
+    def test_keychain_provider_requires_explicit_connector_allowlist(self) -> None:
+        resolver = SecretResolver(MemorySecretStore(), accounts=[])
+        with patch("founder_os.config.build_secret_resolver", return_value=resolver):
+            with self.assertRaisesRegex(ConfigError, "Slack token must be listed"):
+                load_config(overrides={
+                    "secrets": {"provider": "macos_keychain", "accounts": []},
+                    "connectors": {
+                        "slack": {
+                            "enabled": True,
+                            "channel_ids": ["C123"],
+                        }
+                    },
+                })
 
 
 if __name__ == "__main__":

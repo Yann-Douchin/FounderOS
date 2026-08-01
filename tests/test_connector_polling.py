@@ -5,6 +5,7 @@ import unittest
 from datetime import datetime, timezone
 from unittest.mock import patch
 
+from founder_os.connectors.base import ConnectorError
 from founder_os.connectors.calendar import GoogleCalendarConnector
 from founder_os.connectors.gmail import GmailConnector
 from founder_os.connectors.linear import LinearConnector
@@ -129,6 +130,26 @@ class DirectConnectorPollingTests(unittest.TestCase):
         self.assertEqual(request.call_count, 2)
         self.assertIn("/archives/C123/", events[0].url)
 
+    def test_slack_remote_error_text_is_not_repeated(self) -> None:
+        with patch.dict(os.environ, {"TEST_SLACK_TOKEN": "slack-token"}), patch(
+            "founder_os.connectors.slack.request_json",
+            return_value={"ok": False, "error": "private subject from remote service"},
+        ):
+            connector = SlackConnector({"token_env": "TEST_SLACK_TOKEN", "channel_ids": ["C123"]})
+            with self.assertRaisesRegex(ConnectorError, "unknown_error") as raised:
+                connector.poll(NOW)
+        self.assertNotIn("private subject", str(raised.exception))
+
+    def test_linear_remote_graphql_message_is_not_repeated(self) -> None:
+        with patch.dict(os.environ, {"TEST_LINEAR_TOKEN": "linear-token"}), patch(
+            "founder_os.connectors.linear.request_json",
+            return_value={"errors": [{"message": "private issue title", "extensions": {"code": "BAD USER DATA"}}]},
+        ):
+            connector = LinearConnector({"token_env": "TEST_LINEAR_TOKEN", "team_keys": ["BUSY"]})
+            with self.assertRaisesRegex(ConnectorError, "graphql_error") as raised:
+                connector.poll(NOW)
+        self.assertNotIn("private issue title", str(raised.exception))
+
     def test_gmail_poll_fetches_metadata_with_static_access_token(self) -> None:
         def response(url, **kwargs):
             if url.endswith("/messages"):
@@ -186,7 +207,7 @@ class DirectConnectorPollingTests(unittest.TestCase):
                 {"access_token_env": "TEST_GOOGLE_ACCESS", "horizon_hours": 8}
             )
             events = connector.poll(NOW)
-        self.assertEqual(events[0].title, "PRÉPA Comité stratégie")
+        self.assertEqual(events[0].title, "PREP Comité stratégie")
         query = request.call_args.kwargs["query"]
         self.assertEqual(query["timeMin"], NOW.isoformat())
         self.assertEqual(query["timeMax"], "2026-08-01T18:00:00+00:00")

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from founder_os.paths import agent_state_root, state_root
+from founder_os.secrets import SecretError, SecretResolver, build_secret_resolver
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -23,6 +24,11 @@ class ConfigError(ValueError):
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
+    "secrets": {
+        "provider": "environment",
+        "service": "com.founderos.runtime",
+        "accounts": [],
+    },
     "runtime": {
         "environment": "development",
         "timezone": "Europe/Madrid",
@@ -32,6 +38,11 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "connector_workers": 4,
         "force_poll_timeout_seconds": 30.0,
         "log_level": "INFO",
+    },
+    "operations": {
+        "health_enabled": False,
+        "health_path": str(state_root() / "health.json"),
+        "heartbeat_seconds": 15.0,
     },
     "display": {
         "host": "127.0.0.1:8080",
@@ -111,6 +122,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "request_timeout_seconds": 6,
             "critical": True,
             "token_env": "LINEAR_API_KEY",
+            "refresh_token_env": "LINEAR_REFRESH_TOKEN",
+            "client_id_env": "LINEAR_CLIENT_ID",
+            "client_secret_env": "LINEAR_CLIENT_SECRET",
+            "oauth_refresh": False,
             "auth_scheme": "api_key",
             "scope": "assigned",
             "team_keys": [],
@@ -239,6 +254,7 @@ def load_config(path: str | Path | None = None, *, overrides: Mapping[str, Any] 
     config = deepcopy(DEFAULT_CONFIG)
     current_state_root = state_root()
     config["memory"]["path"] = str(current_state_root / "memory.json")
+    config["operations"]["health_path"] = str(current_state_root / "health.json")
     config["interaction"]["action_outbox_path"] = str(current_state_root / "actions")
     current_agent_root = str(current_state_root / "agents")
     config["connectors"]["claude"]["state_dir"] = current_agent_root
@@ -257,11 +273,25 @@ def load_config(path: str | Path | None = None, *, overrides: Mapping[str, Any] 
     if overrides:
         _merge(config, overrides)
     config = _expand_env(config)
-    _validate(config)
+    try:
+        secrets = build_secret_resolver(config["secrets"])
+        _validate(config, secrets=secrets)
+    except SecretError as exc:
+        raise ConfigError(str(exc)) from exc
     return config
 
 
-def _validate(config: Mapping[str, Any]) -> None:
+def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = None) -> None:
+    secret_config = config["secrets"]
+    provider = str(secret_config["provider"]).strip().lower()
+    if provider not in {"environment", "macos_keychain"}:
+        raise ConfigError("secrets.provider must be environment or macos_keychain")
+    accounts = secret_config.get("accounts")
+    if not isinstance(accounts, list) or not all(isinstance(value, str) and value.strip() for value in accounts):
+        raise ConfigError("secrets.accounts must be a list of non-empty environment names")
+    operations = config["operations"]
+    if float(operations["heartbeat_seconds"]) <= 0:
+        raise ConfigError("operations.heartbeat_seconds must be positive")
     runtime = config["runtime"]
     environment = str(runtime["environment"]).strip().lower()
     if environment not in {"development", "test", "production"}:
@@ -339,6 +369,15 @@ def _validate(config: Mapping[str, Any]) -> None:
         raise ConfigError("connectors.linear.scope must be assigned or portfolio")
     if str(linear.get("auth_scheme", "api_key")).strip().lower() not in {"api_key", "bearer"}:
         raise ConfigError("connectors.linear.auth_scheme must be api_key or bearer")
+    linear_refresh_names = (
+        str(linear.get("refresh_token_env", "")).strip(),
+        str(linear.get("client_id_env", "")).strip(),
+    )
+    linear_refresh_enabled = bool(linear.get("oauth_refresh", False))
+    if linear_refresh_enabled and not all(linear_refresh_names):
+        raise ConfigError("Linear OAuth refresh requires refresh_token_env and client_id_env")
+    if linear_refresh_enabled and str(linear.get("auth_scheme", "")).strip().lower() != "bearer":
+        raise ConfigError("Linear OAuth refresh requires auth_scheme bearer")
     team_keys = linear.get("team_keys")
     if not isinstance(team_keys, list) or not all(str(value).strip() for value in team_keys):
         raise ConfigError("connectors.linear.team_keys must be a list of non-empty keys")
@@ -382,6 +421,54 @@ def _validate(config: Mapping[str, Any]) -> None:
         raise ConfigError("connectors.calendar.readiness_minutes must be at least 5")
     if not isinstance(calendar.get("readiness_keywords", []), list):
         raise ConfigError("connectors.calendar.readiness_keywords must be a list")
+    display_hostname = parsed_display.hostname or ""
+    try:
+        display_is_loopback = ipaddress.ip_address(display_hostname).is_loopback
+    except ValueError:
+        display_is_loopback = display_hostname == "localhost"
+    if provider == "macos_keychain":
+        allowed_accounts = {str(value).strip() for value in accounts}
+
+        def require_account(name: Any, context: str) -> None:
+            account = str(name or "").strip()
+            if not account or account not in allowed_accounts:
+                raise ConfigError(f"{context} must be listed in secrets.accounts: {account or '<empty>'}")
+
+        if linear.get("enabled") and linear.get("mode", "api") == "api":
+            if linear_refresh_enabled:
+                require_account(linear.get("refresh_token_env"), "Linear refresh token")
+                require_account(linear.get("client_id_env"), "Linear client id")
+            else:
+                require_account(linear.get("token_env"), "Linear API token")
+        if slack.get("enabled") and slack.get("mode", "api") == "api":
+            require_account(slack.get("token_env"), "Slack token")
+        for connector_name, google_connector in (("Gmail", gmail), ("Calendar", calendar)):
+            if not google_connector.get("enabled") or google_connector.get("mode", "api") != "api":
+                continue
+            access_account = str(google_connector.get("access_token_env", "")).strip()
+            refresh_account = str(google_connector.get("refresh_token_env", "")).strip()
+            client_account = str(google_connector.get("client_id_env", "")).strip()
+            static_allowed = bool(access_account and access_account in allowed_accounts)
+            refresh_allowed = bool(
+                refresh_account
+                and refresh_account in allowed_accounts
+                and client_account
+                and client_account in allowed_accounts
+            )
+            if not static_allowed and not refresh_allowed:
+                raise ConfigError(
+                    f"{connector_name} requires either its access token or both refresh token and client id "
+                    "in secrets.accounts"
+                )
+        linkedin = config["connectors"]["linkedin"]
+        if linkedin.get("enabled") and str(linkedin.get("feed_url", "")).strip():
+            require_account(linkedin.get("token_env"), "LinkedIn feed token")
+        if bool(config["llm"]["enabled"]):
+            require_account(config["llm"].get("api_key_env"), "LLM API key")
+        if bool(interaction["enabled"]) and mode == "signed_http":
+            require_account(interaction.get("secret_env"), "signed input secret")
+        if not display_is_loopback:
+            require_account(display.get("api_token_env"), "BUSY Bar API token")
     if environment == "production":
         demo = config["connectors"].get("demo")
         if isinstance(demo, Mapping) and demo.get("enabled"):
@@ -396,6 +483,8 @@ def _validate(config: Mapping[str, Any]) -> None:
         if not enabled_connectors:
             raise ConfigError("production requires at least one active connector")
         private_paths = [Path(str(config["memory"]["path"])), Path(str(interaction["action_outbox_path"]))]
+        if bool(operations["health_enabled"]):
+            private_paths.append(Path(str(operations["health_path"])))
         for name in ("claude", "chatgpt_codex"):
             connector = config["connectors"].get(name)
             if isinstance(connector, Mapping):
@@ -409,13 +498,10 @@ def _validate(config: Mapping[str, Any]) -> None:
         invalid_paths = [path for path in private_paths if not path.expanduser().is_absolute() or not path.expanduser().resolve().is_relative_to(approved_state_root)]
         if invalid_paths:
             raise ConfigError(f"production private paths must be inside FOUNDEROS_STATE_DIR ({approved_state_root}): {invalid_paths}")
-        hostname = parsed_display.hostname or ""
-        try:
-            is_loopback = ipaddress.ip_address(hostname).is_loopback
-        except ValueError:
-            is_loopback = hostname == "localhost"
+        is_loopback = display_is_loopback
         token_env = str(display.get("api_token_env", "")).strip()
-        if not is_loopback and (not token_env or not os.environ.get(token_env, "").strip()):
+        secret_resolver = secrets or SecretResolver()
+        if not is_loopback and (not token_env or not secret_resolver.get(token_env)):
             raise ConfigError("a BUSY Bar API token is required for a non-loopback production display")
         if (
             not is_loopback
@@ -425,6 +511,8 @@ def _validate(config: Mapping[str, Any]) -> None:
             raise ConfigError(
                 "non-loopback production HTTP requires display.allow_insecure_http=true"
             )
+        if linear_refresh_enabled and not secret_resolver.persistent:
+            raise ConfigError("production Linear OAuth refresh requires a persistent secret provider")
 
 
 def redact_config(config: Mapping[str, Any]) -> dict[str, Any]:

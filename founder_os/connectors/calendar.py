@@ -24,7 +24,7 @@ class GoogleCalendarConnector(Connector):
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         super().__init__(config)
-        self.token_provider = GoogleAccessTokenProvider(config)
+        self.token_provider = GoogleAccessTokenProvider(config, secrets=self.secrets)
         self.calendar_id = str(config.get("calendar_id", "primary"))
         self.horizon_hours = max(1.0, float(config.get("horizon_hours", 8)))
         self.readiness_minutes = max(5.0, float(config.get("readiness_minutes", 30)))
@@ -82,7 +82,7 @@ class GoogleCalendarConnector(Connector):
         now: datetime,
         deadline: float,
     ) -> dict[str, Any]:
-        token = self.token_provider.token(now)
+        token = self.token_provider.token(now, deadline_monotonic=deadline)
         timeout = self._remaining_timeout(deadline)
         try:
             return request_json(
@@ -91,12 +91,13 @@ class GoogleCalendarConnector(Connector):
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=timeout,
                 retries=self.http_retries,
+                deadline_monotonic=deadline,
             )
         except ConnectorHTTPError as exc:
             if exc.status_code != 401 or not self.token_provider.refreshable:
                 raise
         self.token_provider.invalidate()
-        token = self.token_provider.token(now)
+        token = self.token_provider.token(now, deadline_monotonic=deadline)
         timeout = self._remaining_timeout(deadline)
         return request_json(
             url,
@@ -104,6 +105,7 @@ class GoogleCalendarConnector(Connector):
             headers={"Authorization": f"Bearer {token}"},
             timeout=timeout,
             retries=0,
+            deadline_monotonic=deadline,
         )
 
     def _remaining_timeout(self, deadline: float) -> float:
@@ -139,7 +141,7 @@ class GoogleCalendarConnector(Connector):
             raise ConnectorError("Calendar event attendees must be a list")
         self_attendee = next((person for person in attendees if person.get("self")), {})
         needs_action = self_attendee.get("responseStatus") == "needsAction"
-        summary = " ".join(str(item.get("summary") or "Rendez-vous").split())
+        summary = " ".join(str(item.get("summary") or "Meeting").split())
         readiness_keywords = getattr(self, "readiness_keywords", DEFAULT_READINESS_KEYWORDS)
         readiness_minutes = getattr(self, "readiness_minutes", 30.0)
         readiness = (
@@ -159,7 +161,7 @@ class GoogleCalendarConnector(Connector):
             priority, urgency = 50, "normal"
         if readiness:
             priority, urgency = max(priority, 80), "high"
-        prefix = "RSVP " if needs_action else "PRÉPA " if readiness else ""
+        prefix = "RSVP " if needs_action else "PREP " if readiness else ""
         return Event(
             id=f"calendar:{event_id}:{start_at.isoformat()}",
             source="calendar",

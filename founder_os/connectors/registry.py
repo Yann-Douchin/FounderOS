@@ -14,6 +14,7 @@ from founder_os.connectors.linear import LinearConnector
 from founder_os.connectors.planned import PlannedConnector
 from founder_os.connectors.snapshot import JsonSnapshotConnector
 from founder_os.connectors.slack import SlackConnector
+from founder_os.secrets import SecretResolver
 
 
 ACTIVE_CONNECTORS = {
@@ -29,29 +30,36 @@ ACTIVE_CONNECTORS = {
 PLANNED_CONNECTORS = {"github", "stripe", "shopify", "home_assistant"}
 
 
-def build_connectors(config: Mapping[str, Any]) -> list[Connector]:
+def build_connectors(
+    config: Mapping[str, Any],
+    *,
+    secrets: SecretResolver | None = None,
+) -> list[Connector]:
     result: list[Connector] = []
     for name, connector_config in config.items():
         if not isinstance(connector_config, Mapping) or not connector_config.get("enabled", False):
             continue
+        runtime_config = dict(connector_config)
+        if secrets is not None:
+            runtime_config["_secret_resolver"] = secrets
         if name in PLANNED_CONNECTORS:
-            result.append(PlannedConnector(connector_config, name=name))
+            result.append(PlannedConnector(runtime_config, name=name))
             continue
-        mode = str(connector_config.get("mode", "api")).strip().lower()
+        mode = str(runtime_config.get("mode", "api")).strip().lower()
         if mode == "snapshot":
             if name not in ACTIVE_CONNECTORS:
                 raise ConnectorConfigurationError(f"snapshot mode is not supported for connector: {name}")
-            result.append(JsonSnapshotConnector(connector_config, source=name))
+            result.append(JsonSnapshotConnector(runtime_config, source=name))
             continue
         if mode == "agent_bridge":
             if name not in {"claude", "chatgpt_codex"}:
                 raise ConnectorConfigurationError(f"agent bridge mode is not supported for connector: {name}")
-            result.append(AgentBridgeConnector(connector_config, source=name))
+            result.append(AgentBridgeConnector(runtime_config, source=name))
             continue
         if mode != "api":
             raise ConnectorConfigurationError(f"unsupported connector mode for {name}: {mode}")
         connector_type = ACTIVE_CONNECTORS.get(name)
         if connector_type is None:
             raise ConnectorConfigurationError(f"unknown connector: {name}")
-        result.append(connector_type(connector_config))
+        result.append(connector_type(runtime_config))
     return result

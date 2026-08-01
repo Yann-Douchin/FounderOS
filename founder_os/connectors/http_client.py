@@ -41,6 +41,7 @@ def request_json(
     timeout: float = 8.0,
     retries: int = 2,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
+    deadline_monotonic: float | None = None,
 ) -> dict[str, Any]:
     if body is not None and form is not None:
         raise ValueError("request body and form are mutually exclusive")
@@ -73,9 +74,15 @@ def request_json(
     raw = b""
     response_limit = max(1024, int(max_response_bytes))
     for attempt in range(attempts):
+        effective_timeout = max(0.1, float(timeout))
+        if deadline_monotonic is not None:
+            remaining = float(deadline_monotonic) - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError(f"{method} {safe_url} exceeded its deadline")
+            effective_timeout = min(effective_timeout, remaining)
         request = urllib.request.Request(url, data=payload, method=method, headers=request_headers)
         try:
-            with _OPENER.open(request, timeout=max(0.1, float(timeout))) as response:
+            with _OPENER.open(request, timeout=effective_timeout) as response:
                 raw = response.read(response_limit + 1)
             if len(raw) > response_limit:
                 raise ConnectorError(
@@ -84,7 +91,12 @@ def request_json(
             break
         except urllib.error.HTTPError as exc:
             if exc.code in {429, 500, 502, 503, 504} and attempt + 1 < attempts:
-                time.sleep(_retry_delay(exc.headers.get("Retry-After"), attempt))
+                _sleep_before_retry(
+                    _retry_delay(exc.headers.get("Retry-After"), attempt),
+                    deadline_monotonic,
+                    method,
+                    safe_url,
+                )
                 continue
             raise ConnectorHTTPError(
                 f"{method} {safe_url} returned HTTP {exc.code}",
@@ -92,7 +104,12 @@ def request_json(
             ) from exc
         except (urllib.error.URLError, TimeoutError, OSError) as exc:
             if attempt + 1 < attempts:
-                time.sleep(_retry_delay(None, attempt))
+                _sleep_before_retry(
+                    _retry_delay(None, attempt),
+                    deadline_monotonic,
+                    method,
+                    safe_url,
+                )
                 continue
             reason = getattr(exc, "reason", exc)
             raise ConnectorError(f"{method} {safe_url} failed: {reason}") from exc
@@ -112,6 +129,21 @@ def _retry_delay(retry_after: str | None, attempt: int) -> float:
         except ValueError:
             pass
     return min(1.0, 0.2 * (2**attempt))
+
+
+def _sleep_before_retry(
+    delay: float,
+    deadline_monotonic: float | None,
+    method: str,
+    safe_url: str,
+) -> None:
+    if deadline_monotonic is None:
+        time.sleep(delay)
+        return
+    remaining = float(deadline_monotonic) - time.monotonic()
+    if remaining <= 0:
+        raise TimeoutError(f"{method} {safe_url} exceeded its deadline")
+    time.sleep(min(delay, remaining))
 
 
 def _validate_url(value: str) -> None:

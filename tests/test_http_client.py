@@ -77,6 +77,18 @@ class HTTPClientTests(unittest.TestCase):
             self.assertEqual(request_json("https://example.test/data", retries=1), {"ok": True})
         self.assertEqual(opened.call_count, 2)
 
+    def test_expired_total_deadline_stops_before_network_io(self) -> None:
+        with patch("founder_os.connectors.http_client.time.monotonic", return_value=10.0), patch(
+            "founder_os.connectors.http_client._OPENER.open"
+        ) as opened:
+            with self.assertRaisesRegex(TimeoutError, "deadline"):
+                request_json(
+                    "https://example.test/data",
+                    retries=1,
+                    deadline_monotonic=9.0,
+                )
+        opened.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

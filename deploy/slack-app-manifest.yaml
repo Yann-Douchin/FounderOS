@@ -1,0 +1,17 @@
+display_information:
+  name: FounderOS
+  description: Read-only decision signals for a local BUSY Bar
+  background_color: "#171717"
+features:
+  bot_user:
+    display_name: FounderOS
+    always_online: false
+oauth_config:
+  scopes:
+    bot:
+      - channels:history
+      - groups:history
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false

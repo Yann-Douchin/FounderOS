@@ -157,7 +157,7 @@ class ConnectorNormalizationTests(unittest.TestCase):
             },
             NOW,
         )
-        self.assertEqual(event.title, "PRÉPA Comité stratégie")
+        self.assertEqual(event.title, "PREP Comité stratégie")
         self.assertEqual(event.urgency, "high")
         self.assertTrue(event.metadata["readiness"])
 

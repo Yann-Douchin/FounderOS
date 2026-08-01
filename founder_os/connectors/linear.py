@@ -8,8 +8,9 @@ from datetime import datetime, timedelta
 from hashlib import sha256
 from typing import Any, Mapping
 
-from founder_os.connectors.base import Connector, ConnectorConfigurationError, ConnectorError, configured_secret
-from founder_os.connectors.http_client import request_json
+from founder_os.connectors.base import Connector, ConnectorConfigurationError, ConnectorError
+from founder_os.connectors.http_client import ConnectorHTTPError, request_json
+from founder_os.connectors.linear_oauth import LinearAccessTokenProvider
 from founder_os.models import Event, parse_datetime, parse_local_date
 
 
@@ -76,10 +77,10 @@ class LinearConnector(Connector):
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         super().__init__(config)
-        self.token = configured_secret(config, "token_env")
         self.auth_scheme = str(config.get("auth_scheme", "api_key")).strip().lower()
         if self.auth_scheme not in {"api_key", "bearer"}:
             raise ConnectorConfigurationError("linear.auth_scheme must be api_key or bearer")
+        self.token_provider = LinearAccessTokenProvider(config, secrets=self.secrets)
         self.endpoint = str(config.get("endpoint", "https://api.linear.app/graphql"))
         self.team_keys = {str(value).upper() for value in config.get("team_keys", [])}
         self.scope = str(config.get("scope", "assigned")).strip().lower()
@@ -99,7 +100,7 @@ class LinearConnector(Connector):
         self.active_event_ttl = timedelta(hours=max(1.0, float(config.get("active_event_ttl_hours", 48))))
 
     def poll(self, now: datetime) -> list[Event]:
-        nodes, viewer_id = self._fetch_issues()
+        nodes, viewer_id = self._fetch_issues(now)
         events: list[Event] = []
         for issue in nodes:
             team_key = str((issue.get("team") or {}).get("key", "")).upper()
@@ -112,7 +113,7 @@ class LinearConnector(Connector):
             return self._rollup_project_events(events, now)
         return events
 
-    def _fetch_issues(self) -> tuple[list[Mapping[str, Any]], str]:
+    def _fetch_issues(self, now: datetime) -> tuple[list[Mapping[str, Any]], str]:
         issues: list[Mapping[str, Any]] = []
         cursor = ""
         viewer_id = ""
@@ -121,11 +122,8 @@ class LinearConnector(Connector):
         while len(issues) < self.max_issues:
             if page_count >= self.max_pages:
                 raise ConnectorError(f"Linear pagination exceeded {self.max_pages} pages")
-            remaining = deadline - time.monotonic()
-            if remaining <= 0:
-                raise TimeoutError(f"Linear poll exceeded {self.poll_timeout_seconds:.0f} seconds")
             variables = self._page_variables(cursor, len(issues))
-            payload = self._graphql(self._query(), variables, remaining)
+            payload = self._graphql(self._query(), variables, deadline, now=now)
             page_count += 1
             nodes, page_info, page_viewer_id = self._page(payload)
             viewer_id = viewer_id or page_viewer_id
@@ -147,16 +145,54 @@ class LinearConnector(Connector):
             variables["teamKeys"] = sorted(self.team_keys)
         return variables
 
-    def _graphql(self, query: str, variables: Mapping[str, Any], remaining: float) -> Mapping[str, Any]:
-        authorization = self.token if self.auth_scheme == "api_key" else f"Bearer {self.token}"
+    def _graphql(
+        self,
+        query: str,
+        variables: Mapping[str, Any],
+        deadline: float,
+        *,
+        now: datetime,
+    ) -> Mapping[str, Any]:
+        timeout = self._remaining_timeout(deadline, retries=self.http_retries)
+        try:
+            return request_json(
+                self.endpoint,
+                method="POST",
+                body={"query": query, "variables": dict(variables)},
+                headers={
+                    "Authorization": self.token_provider.authorization(
+                        now,
+                        deadline_monotonic=deadline,
+                    )
+                },
+                timeout=timeout,
+                retries=self.http_retries,
+                deadline_monotonic=deadline,
+            )
+        except ConnectorHTTPError as exc:
+            if exc.status_code != 401 or not self.token_provider.refreshable:
+                raise
+        self.token_provider.invalidate()
         return request_json(
             self.endpoint,
             method="POST",
             body={"query": query, "variables": dict(variables)},
-            headers={"Authorization": authorization},
-            timeout=min(self.request_timeout, remaining / (self.http_retries + 1)),
-            retries=self.http_retries,
+            headers={
+                "Authorization": self.token_provider.authorization(
+                    now,
+                    deadline_monotonic=deadline,
+                )
+            },
+            timeout=self._remaining_timeout(deadline, retries=0),
+            retries=0,
+            deadline_monotonic=deadline,
         )
+
+    def _remaining_timeout(self, deadline: float, *, retries: int) -> float:
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError(f"Linear poll exceeded {self.poll_timeout_seconds:.0f} seconds")
+        return min(self.request_timeout, remaining / (max(0, int(retries)) + 1))
 
     def _page(self, payload: Mapping[str, Any]) -> tuple[list[Mapping[str, Any]], Mapping[str, Any], str]:
         errors = payload.get("errors")
@@ -183,8 +219,14 @@ class LinearConnector(Connector):
     def _error_summary(errors: Any) -> str:
         if not isinstance(errors, list):
             return "unknown error"
-        messages = [str(item.get("message") or "error") for item in errors if isinstance(item, Mapping)]
-        return "; ".join(messages)[:400] or "unknown error"
+        codes = []
+        for item in errors:
+            if not isinstance(item, Mapping):
+                continue
+            extensions = item.get("extensions") or {}
+            code = str(extensions.get("code") or "graphql_error") if isinstance(extensions, Mapping) else "graphql_error"
+            codes.append(code if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", code) else "graphql_error")
+        return "; ".join(codes[:8]) or "unknown error"
 
     @staticmethod
     def _next_cursor(page_info: Mapping[str, Any], current: str) -> str:
@@ -235,7 +277,7 @@ class LinearConnector(Connector):
         title = f"{identifier} {issue_title}".strip()
         assignee = issue.get("assignee") or {}
         project = issue.get("project") or {}
-        owner_name = str(assignee.get("name") or "Non assigné")
+        owner_name = str(assignee.get("name") or "Unassigned")
         body = " · ".join(value for value in (state_name, owner_name, str(project.get("name") or "")) if value)
         return Event(
             id=f"linear:{issue_id}",
@@ -286,20 +328,20 @@ class LinearConnector(Connector):
 
     def _project_rollup(self, project_key: str, events: list[Event], now: datetime) -> Event:
         first = events[0]
-        project_name = str(first.metadata.get("project") or "Projet")
+        project_name = str(first.metadata.get("project") or "Project")
         blockers = [event for event in events if event.kind == "blocker"]
-        owners = sorted({str(event.metadata.get("assignee") or "Non assigné") for event in events})
+        owners = sorted({str(event.metadata.get("assignee") or "Unassigned") for event in events})
         deadlines = [event.due_at for event in events if event.due_at]
         due_at = min(deadlines) if deadlines else None
         critical = bool(blockers or any(event.urgency == "critical" for event in events))
         digest = sha256(project_key.encode("utf-8")).hexdigest()[:16]
-        issue_word = "risque" if len(events) == 1 else "risques"
+        issue_word = "risk" if len(events) == 1 else "risks"
         return Event(
             id=f"linear:project:{digest}",
             source="linear",
             kind="blocker" if blockers else "deadline" if due_at else "information",
-            title=f"{project_name}: {len(events)} {issue_word} ouverts",
-            body=f"{len(blockers)} blocages · {len(owners)} responsables",
+            title=f"{project_name}: {len(events)} open {issue_word}",
+            body=f"{len(blockers)} blockers · {len(owners)} owners",
             priority=min(100, max(event.priority for event in events) + 4),
             action_required=True,
             urgency="critical" if critical else "high",

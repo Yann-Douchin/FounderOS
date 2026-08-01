@@ -75,7 +75,7 @@ class DemoConnector(Connector):
             id="demo:gmail:term-sheet",
             source="gmail",
             kind="email",
-            title="Élodie : décision à valider",
+            title="Élodie: decision to review",
             priority=72,
             action_required=True,
             urgency="normal",

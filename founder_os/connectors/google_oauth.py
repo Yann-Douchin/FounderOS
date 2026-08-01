@@ -2,26 +2,28 @@
 
 from __future__ import annotations
 
-import os
 import threading
+import time
 from datetime import datetime, timedelta
 from typing import Any, Mapping
 
 from founder_os.connectors.base import ConnectorConfigurationError, ConnectorError
 from founder_os.connectors.http_client import request_json
 from founder_os.models import UTC, utc_now
+from founder_os.secrets import SecretResolver
 
 
 class GoogleAccessTokenProvider:
-    def __init__(self, config: Mapping[str, Any]) -> None:
-        self.static_token = _optional_secret(config, "access_token_env")
-        self.refresh_token = _optional_secret(config, "refresh_token_env")
-        self.client_id = _optional_secret(config, "client_id_env")
-        self.client_secret = _optional_secret(config, "client_secret_env")
-        refresh_values = (self.refresh_token, self.client_id, self.client_secret)
-        if any(refresh_values) and not all(refresh_values):
+    def __init__(self, config: Mapping[str, Any], *, secrets: SecretResolver | None = None) -> None:
+        self.secrets = secrets or SecretResolver()
+        self.static_token = _optional_secret(config, "access_token_env", self.secrets)
+        self.refresh_token = _optional_secret(config, "refresh_token_env", self.secrets)
+        self.client_id = _optional_secret(config, "client_id_env", self.secrets)
+        self.client_secret = _optional_secret(config, "client_secret_env", self.secrets)
+        refresh_values = (self.refresh_token, self.client_id)
+        if any((self.refresh_token, self.client_id, self.client_secret)) and not all(refresh_values):
             raise ConnectorConfigurationError(
-                "Google OAuth refresh requires refresh_token_env, client_id_env, and client_secret_env"
+                "Google OAuth refresh requires refresh_token_env and client_id_env"
             )
         if not self.static_token and not all(refresh_values):
             raise ConnectorConfigurationError(
@@ -37,26 +39,40 @@ class GoogleAccessTokenProvider:
 
     @property
     def refreshable(self) -> bool:
-        return bool(self.refresh_token and self.client_id and self.client_secret)
+        return bool(self.refresh_token and self.client_id)
 
-    def token(self, now: datetime | None = None) -> str:
+    def token(
+        self,
+        now: datetime | None = None,
+        *,
+        deadline_monotonic: float | None = None,
+    ) -> str:
         now = (now or utc_now()).astimezone(UTC)
         with self._lock:
             if self._access_token and self._refresh_at and now < self._refresh_at:
                 return self._access_token
             if not self.refreshable:
                 return self.static_token
+            timeout = self.timeout
+            if deadline_monotonic is not None:
+                remaining = float(deadline_monotonic) - time.monotonic()
+                if remaining <= 0:
+                    raise TimeoutError("Google OAuth refresh exceeded its deadline")
+                timeout = min(timeout, remaining)
+            form = {
+                "grant_type": "refresh_token",
+                "refresh_token": self.refresh_token,
+                "client_id": self.client_id,
+            }
+            if self.client_secret:
+                form["client_secret"] = self.client_secret
             payload = request_json(
                 self.token_uri,
                 method="POST",
-                form={
-                    "grant_type": "refresh_token",
-                    "refresh_token": self.refresh_token,
-                    "client_id": self.client_id,
-                    "client_secret": self.client_secret,
-                },
-                timeout=self.timeout,
+                form=form,
+                timeout=timeout,
                 retries=0,
+                deadline_monotonic=deadline_monotonic,
             )
             access_token = str(payload.get("access_token", "")).strip()
             try:
@@ -78,6 +94,6 @@ class GoogleAccessTokenProvider:
             self._refresh_at = None
 
 
-def _optional_secret(config: Mapping[str, Any], field: str) -> str:
+def _optional_secret(config: Mapping[str, Any], field: str, secrets: SecretResolver) -> str:
     environment_name = str(config.get(field, "")).strip()
-    return os.environ.get(environment_name, "").strip() if environment_name else ""
+    return secrets.get(environment_name) if environment_name else ""

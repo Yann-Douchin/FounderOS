@@ -1,6 +1,6 @@
 # FounderOS configuration
 
-FounderOS uses JSON plus environment variables for secrets. Start from the tracked example:
+FounderOS uses JSON for non-secret settings. It supports environment-provided secrets for portable deployments and the native macOS Keychain for the autonomous local service. Start from the tracked example:
 
 ```bash
 cp founderos.example.json founderos.local.json
@@ -16,6 +16,88 @@ python3 apps/founderos.py --config founderos.local.json --once --dry-run --requi
 ```
 
 Production one-shot runs enforce the same rule automatically for every connector marked `critical`.
+
+## Autonomous macOS deployment
+
+Start from `founderos.macos.example.json` and save the deployment settings in an ignored local file:
+
+```bash
+cp founderos.macos.example.json founderos.autonomous.local.json
+```
+
+The `secrets.accounts` list is an explicit allowlist. Every secret used by an enabled API connector must appear there. When the Keychain provider is selected, credentials resolve only from that persistent store. Ambient environment variables are never a fallback. This prevents stale process state from overriding or impersonating rotated credentials.
+
+### Linear OAuth
+
+Create a private Linear OAuth application with this exact redirect URI:
+
+```text
+http://127.0.0.1:8766/oauth/callback
+```
+
+Request only the `read` scope, leave webhooks disabled, and authorize it with:
+
+```bash
+python3 apps/founderosctl.py \
+  --config founderos.autonomous.local.json \
+  auth linear \
+  --client-id YOUR_LINEAR_CLIENT_ID
+```
+
+FounderOS stores the client ID and refresh token in the Keychain. Linear refresh-token rotation is persisted before the corresponding access token can be used.
+
+### Google OAuth
+
+In a Google Cloud project owned by the deployment organization, enable the Gmail API and Google Calendar API. Configure the OAuth consent screen, then create and download a Desktop app OAuth client. Web application clients are rejected because the loopback port is intentionally ephemeral.
+
+```bash
+python3 apps/founderosctl.py \
+  --config founderos.autonomous.local.json \
+  auth google \
+  --client-json ~/Downloads/client_secret.json
+```
+
+The authorization request contains only `gmail.readonly` and `calendar.events.readonly`, requests offline access, uses PKCE, validates a random state value, accepts the callback only on `127.0.0.1`, and rejects a partial scope grant before storing credentials.
+
+### Slack app
+
+Create the private Slack app from `deploy/slack-app-manifest.yaml`, install it in the intended workspace, and invite the FounderOS bot to every allowlisted conversation. The manifest grants only `channels:history` and `groups:history`. It enables neither events, commands, socket mode, nor message writes.
+
+Copy the resulting bot token and immediately import it from the macOS clipboard:
+
+```bash
+python3 apps/founderosctl.py \
+  --config founderos.autonomous.local.json \
+  secret import-clipboard SLACK_BOT_TOKEN
+```
+
+This command never prints the token and clears the clipboard after the Keychain write. `secret status` reports only `configured` or `missing`.
+
+### Preflight and LaunchAgents
+
+No service is installed until all enabled connectors complete one healthy read-only poll:
+
+```bash
+python3 apps/founderos.py \
+  --config founderos.autonomous.local.json \
+  --once --dry-run --require-healthy
+
+npm run build
+python3 apps/founderosctl.py \
+  --config founderos.autonomous.local.json \
+  service install
+```
+
+The installation creates two private user LaunchAgents. `com.founderos.busybar-emulator` binds the emulator to `127.0.0.1` and stores emulator state under the private FounderOS application-state directory, never in the checkout. `com.founderos.runtime` starts FounderOS after login and restarts it after unsuccessful exits. Their plists contain executable paths and non-secret environment settings only. Installation waits for a fresh `running` heartbeat whose PID matches the process reported by launchd, whose display is healthy, and whose connectors have completed healthy polls. An old heartbeat or a live but degraded process cannot hide a failed start.
+
+```bash
+python3 apps/founderosctl.py --config founderos.autonomous.local.json service status
+python3 apps/founderosctl.py --config founderos.autonomous.local.json service uninstall
+```
+
+The heartbeat is mode `0600` and contains source names, counts, state, and boolean error presence only. It never contains task titles, message bodies, email subjects, remote error text, or credentials. Logs and state live under `~/Library/Application Support/FounderOS` with private directory modes.
+
+When using physical hardware, set its host in the local configuration and pass `service install --skip-emulator`. A non-loopback production display requires a Keychain-allowlisted BUSY Bar API token. Plain HTTP also requires the explicit `display.allow_insecure_http` risk acceptance.
 
 ## Content-aware animated icon
 
@@ -154,7 +236,7 @@ Recommended least-privilege scopes:
 
 Gmail message metadata is fetched concurrently with bounded workers and a total poll deadline. Unread mail is not automatically actionable. A deterministic classifier separates explicit requests, important messages, received attachments, and informational mail such as invoices, receipts, refunds, and newsletters. Explicit phrases such as `aucune action requise` override embedded action words. VIP entries match an exact address or an exact domain, never an address substring. Tune the classifier with `vip_senders`, `action_keywords`, `non_action_keywords`, `fyi_keywords`, and `urgent_keywords`.
 
-Calendar includes timed and all-day events. Meetings whose titles match `readiness_keywords` become a `PRÉPA` action during the configurable 30-minute readiness window. This gives launch, customer, investor, contract, and strategy boundaries precedence without calling a model. Calendar follows page tokens up to `max_events`, `max_pages`, and one total poll deadline. Both Google connectors invalidate and refresh once after an HTTP `401` when refresh credentials are available.
+Calendar includes timed and all-day events. Meetings whose titles match `readiness_keywords` become a `PREP` action during the configurable 30-minute readiness window. This gives launch, customer, investor, contract, and strategy boundaries precedence without calling a model. Calendar follows page tokens up to `max_events`, `max_pages`, and one total poll deadline. Both Google connectors invalidate and refresh once after an HTTP `401` when refresh credentials are available.
 
 References: [Gmail scopes](https://developers.google.com/identity/protocols/oauth2/scopes#gmail), [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
 

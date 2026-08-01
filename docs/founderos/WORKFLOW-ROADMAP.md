@@ -18,7 +18,7 @@ FounderOS should therefore rank decision debt, critical-path risk, follow-up pro
 ## Closure foundation now shipped
 
 - Linear `portfolio` scope observes authorized team risk, retains the founder's own work, and collapses multiple relevant project issues into one outcome-level event.
-- Calendar promotes important meetings into a deterministic `PRÉPA` window 30 minutes before start.
+- Calendar promotes important meetings into a deterministic `PREP` window 30 minutes before start.
 - Slack distinguishes urgent incidents, access or dependency waits, decision requests, and ordinary mentions.
 - Gmail separates explicit actions and important decisions from FYI billing mail and received artifacts.
 - Every one of these rules is local, configurable, explainable, and covered by regression tests. None invokes an LLM.
@@ -35,7 +35,7 @@ Extend the shipped Linear project rollup with deployment, analytics, customer, a
 
 ### Meeting readiness mode
 
-The shipped 30-minute `PRÉPA` state provides the deterministic trigger. Enrich it with a compact brief assembled from the related Linear project, latest Slack decision, and unresolved email promise. After the meeting, suppress it and surface the next recorded commitment.
+The shipped 30-minute `PREP` state provides the deterministic trigger. Enrich it with a compact brief assembled from the related Linear project, latest Slack decision, and unresolved email promise. After the meeting, suppress it and surface the next recorded commitment.
 
 ### Promise and follow-up radar
 

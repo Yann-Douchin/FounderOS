@@ -11,10 +11,12 @@
 const http = require("http");
 const fs = require("fs");
 const path = require("path");
+const os = require("os");
 const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
+const HOST = process.env.BUSY_HOST || "127.0.0.1";
 const TOKEN = process.env.BUSY_API_TOKEN || null;
 const PYTHON = process.env.BUSY_PYTHON || "python3";
 const APPS_DIR = path.join(__dirname, "apps");
@@ -310,7 +312,22 @@ function stopApp() {
 }
 
 /* ---------------------------- persistence -------------------------------- */
-const DATA_DIR = path.join(__dirname, ".data");
+function defaultDataDir() {
+  if (process.platform === "darwin") return path.join(os.homedir(), "Library", "Application Support", "FounderOS", "emulator");
+  if (process.platform === "win32") {
+    const local = process.env.LOCALAPPDATA;
+    return path.join(local && path.isAbsolute(local) ? local : os.homedir(), "FounderOS", "emulator");
+  }
+  const xdg = process.env.XDG_STATE_HOME;
+  const stateRoot = xdg && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), ".local", "state");
+  return path.join(stateRoot, "founderos", "emulator");
+}
+function configuredDataDir() {
+  const configured = process.env.BUSY_DATA_DIR;
+  if (configured && !path.isAbsolute(configured)) throw new Error("BUSY_DATA_DIR must be absolute");
+  return path.resolve(configured || defaultDataDir());
+}
+const DATA_DIR = configuredDataDir();
 const STATE_FILE = path.join(DATA_DIR, "state.json");
 let _saveTimer = null;
 function saveState() {
@@ -320,7 +337,13 @@ function saveState() {
     const stor = {}; for (const [k, v] of Object.entries(state.storage)) stor[k] = { type: v.type, b64: v.data ? v.data.toString("base64") : null };
     const ass = {}; for (const [k, v] of Object.entries(state.assets)) ass[k] = { b64: v.buf.toString("base64"), type: v.type };
     const json = JSON.stringify({ storage: stor, assets: ass });
-    try { if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true }); const tmp = STATE_FILE + ".tmp"; fs.writeFileSync(tmp, json); fs.renameSync(tmp, STATE_FILE); } catch (e) { console.warn("[persist] save failed:", e.message); }
+    try {
+      if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
+      const tmp = STATE_FILE + ".tmp";
+      fs.writeFileSync(tmp, json, { encoding: "utf8", mode: 0o600 });
+      fs.renameSync(tmp, STATE_FILE);
+      fs.chmodSync(STATE_FILE, 0o600);
+    } catch (e) { console.warn("[persist] save failed:", e.message); }
   }, 500);
 }
 function loadState(st) {
@@ -729,9 +752,9 @@ function killChild() {
 process.on("SIGINT", () => { killChild(); process.exit(0); });
 process.on("SIGTERM", () => { killChild(); process.exit(0); });
 
-server.listen(PORT, () => {
+server.listen(PORT, HOST, () => {
   console.log(`\n  BUSY Bar emulator running`);
-  console.log(`  ├─ display : http://127.0.0.1:${PORT}/`);
-  console.log(`  ├─ API base: http://127.0.0.1:${PORT}/api  (api_semver ${API_SEMVER})`);
+  console.log(`  ├─ display : http://${HOST}:${PORT}/`);
+  console.log(`  ├─ API base: http://${HOST}:${PORT}/api  (api_semver ${API_SEMVER})`);
   console.log(`  └─ ${Object.keys(ANIMATIONS).length} device animation(s)${TOKEN ? " · X-API-Token required for non-localhost" : ""}\n`);
 });

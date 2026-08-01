@@ -3,6 +3,7 @@ web/node_modules/
 web/dist/
 .data/
 founderos.local.json
+founderos.*.local.json
 __pycache__/
 *.pyc
 .DS_Store

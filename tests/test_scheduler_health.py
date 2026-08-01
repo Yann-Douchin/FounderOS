@@ -81,7 +81,7 @@ class SchedulerHealthTests(unittest.TestCase):
             active = bus.active(NOW + timedelta(seconds=2))
             self.assertTrue(any(event.id == "linear:1" for event in active))
             health = next(event for event in active if event.kind == "connector_health")
-            self.assertIn("périmées", health.title)
+            self.assertIn("Stale", health.title)
             self.assertEqual(scheduler.health_snapshot()["linear"]["status"], "stale")
         finally:
             scheduler.close()
