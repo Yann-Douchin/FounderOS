@@ -75,7 +75,7 @@ class DemoConnector(Connector):
             id="demo:gmail:term-sheet",
             source="gmail",
             kind="email",
-            title="Maya: Term sheet questions",
+            title="Élodie : décision à valider",
             priority=72,
             action_required=True,
             urgency="normal",

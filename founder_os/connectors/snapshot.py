@@ -7,7 +7,13 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Mapping
 
-from founder_os.connectors.base import Connector, ConnectorConfigurationError, ConnectorError
+from founder_os.connectors.base import (
+    Connector,
+    ConnectorConfigurationError,
+    ConnectorError,
+    ConnectorStaleError,
+    ConnectorUnavailableError,
+)
 from founder_os.models import Event, parse_datetime
 
 
@@ -19,7 +25,7 @@ class JsonSnapshotConnector(Connector):
 
     The intended writer is an authorized local bridge, such as a Codex session
     with a connected Linear, Slack, Gmail, or Google Calendar app. Snapshot
-    files live under ``.data/`` and are ignored by Git.
+    files live under the private FounderOS state directory, outside Git.
     """
 
     def __init__(self, config: Mapping[str, Any], *, source: str) -> None:
@@ -29,7 +35,7 @@ class JsonSnapshotConnector(Connector):
         raw_path = str(config.get("snapshot_path", "")).strip()
         if not raw_path:
             raise ConnectorConfigurationError(f"{source}.snapshot_path is required in snapshot mode")
-        self.path = Path(raw_path)
+        self.path = Path(raw_path).expanduser()
         self.max_snapshot_age = timedelta(
             minutes=max(1.0, float(config.get("max_snapshot_age_minutes", 1440)))
         )
@@ -39,7 +45,7 @@ class JsonSnapshotConnector(Connector):
 
     def poll(self, now: datetime) -> list[Event]:
         if not self.path.exists():
-            return []
+            raise ConnectorUnavailableError(f"{self.source} snapshot is missing: {self.path}")
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -47,7 +53,11 @@ class JsonSnapshotConnector(Connector):
 
         rows, generated_at = self._unpack(payload)
         if now - generated_at > self.max_snapshot_age:
-            return []
+            age_minutes = max(0, round((now - generated_at).total_seconds() / 60))
+            raise ConnectorStaleError(
+                f"{self.source} snapshot is {age_minutes} minutes old, maximum is "
+                f"{round(self.max_snapshot_age.total_seconds() / 60)}"
+            )
 
         events: list[Event] = []
         for index, row in enumerate(rows):

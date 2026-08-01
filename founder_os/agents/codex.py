@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import os
-import selectors
+import queue
 import shutil
 import subprocess
 import threading
@@ -30,6 +30,9 @@ class CodexAppServerClient:
         self._process: subprocess.Popen[str] | None = None
         self._next_id = 1
         self._lock = threading.Lock()
+        self._reader_thread: threading.Thread | None = None
+        self._messages: queue.Queue[dict[str, Any] | CodexAppServerError] = queue.Queue()
+        self._pending: dict[int, dict[str, Any]] = {}
 
     def read_rate_limits(self) -> dict[str, Any]:
         with self._lock:
@@ -38,6 +41,7 @@ class CodexAppServerClient:
 
     def close(self) -> None:
         process, self._process = self._process, None
+        reader, self._reader_thread = self._reader_thread, None
         if process is None:
             return
         if process.stdin:
@@ -52,6 +56,10 @@ class CodexAppServerClient:
             except subprocess.TimeoutExpired:
                 process.kill()
                 process.wait(timeout=1.0)
+        if reader:
+            reader.join(timeout=1.0)
+        if process.stdout:
+            process.stdout.close()
 
     def _start(self) -> None:
         if self._process is not None and self._process.poll() is None:
@@ -69,6 +77,15 @@ class CodexAppServerClient:
             )
         except OSError as exc:
             raise CodexAppServerError(f"cannot start Codex app-server: {exc}") from exc
+        self._messages = queue.Queue()
+        self._pending = {}
+        self._reader_thread = threading.Thread(
+            target=self._read_output,
+            args=(self._process, self._messages),
+            name="founderos-codex-reader",
+            daemon=True,
+        )
+        self._reader_thread.start()
         self._send(
             {
                 "method": "initialize",
@@ -86,13 +103,13 @@ class CodexAppServerClient:
         self._send({"method": "initialized", "params": {}})
 
     def _request(self, method: str, params: Mapping[str, Any] | None = None) -> dict[str, Any]:
-        self._start()
-        request_id = self._next_id
-        self._next_id += 1
-        message: dict[str, Any] = {"method": method, "id": request_id}
-        if params is not None:
-            message["params"] = dict(params)
         try:
+            self._start()
+            request_id = self._next_id
+            self._next_id += 1
+            message: dict[str, Any] = {"method": method, "id": request_id}
+            if params is not None:
+                message["params"] = dict(params)
             self._send(message)
             return self._wait_for(request_id)
         except CodexAppServerError:
@@ -113,39 +130,66 @@ class CodexAppServerClient:
         process = self._process
         if process is None or process.stdout is None:
             raise CodexAppServerError("Codex app-server output is unavailable")
+        pending = self._pending.pop(request_id, None)
+        if pending is not None:
+            return self._response_result(pending)
         deadline = time.monotonic() + self.timeout_seconds
-        selector = selectors.DefaultSelector()
-        selector.register(process.stdout, selectors.EVENT_READ)
-        try:
-            while time.monotonic() < deadline:
-                if process.poll() is not None:
-                    raise CodexAppServerError(
-                        f"Codex app-server exited with status {process.returncode}"
-                    )
-                ready = selector.select(max(0.0, deadline - time.monotonic()))
-                if not ready:
-                    break
-                line = process.stdout.readline()
-                if not line:
-                    raise CodexAppServerError("Codex app-server closed its output")
-                try:
-                    message = json.loads(line)
-                except json.JSONDecodeError as exc:
-                    raise CodexAppServerError("Codex app-server returned invalid JSON") from exc
-                if not isinstance(message, dict) or message.get("id") != request_id:
-                    continue
-                error = message.get("error")
-                if isinstance(error, Mapping):
-                    raise CodexAppServerError(
-                        str(error.get("message") or "Codex app-server request failed")
-                    )
-                result = message.get("result")
-                if not isinstance(result, dict):
-                    raise CodexAppServerError("Codex app-server response has no result object")
-                return result
-        finally:
-            selector.close()
+        while time.monotonic() < deadline:
+            remaining = max(0.0, deadline - time.monotonic())
+            try:
+                message = self._messages.get(timeout=remaining)
+            except queue.Empty:
+                break
+            if isinstance(message, CodexAppServerError):
+                raise message
+            message_id = message.get("id")
+            if message_id == request_id and not message.get("method"):
+                return self._response_result(message)
+            if message_id is not None and message.get("method"):
+                self._send(
+                    {
+                        "id": message_id,
+                        "error": {"code": -32601, "message": "FounderOS does not handle server requests"},
+                    }
+                )
+            elif isinstance(message_id, int):
+                self._pending[message_id] = message
         raise CodexAppServerError("Codex app-server request timed out")
+
+    @staticmethod
+    def _response_result(message: Mapping[str, Any]) -> dict[str, Any]:
+        error = message.get("error")
+        if isinstance(error, Mapping):
+            raise CodexAppServerError(
+                str(error.get("message") or "Codex app-server request failed")
+            )
+        result = message.get("result")
+        if not isinstance(result, dict):
+            raise CodexAppServerError("Codex app-server response has no result object")
+        return result
+
+    @staticmethod
+    def _read_output(
+        process: subprocess.Popen[str],
+        messages: queue.Queue[dict[str, Any] | CodexAppServerError],
+    ) -> None:
+        if process.stdout is None:
+            messages.put(CodexAppServerError("Codex app-server output is unavailable"))
+            return
+        for line in process.stdout:
+            if len(line) > 1024 * 1024:
+                messages.put(CodexAppServerError("Codex app-server response exceeded one megabyte"))
+                return
+            try:
+                message = json.loads(line)
+            except json.JSONDecodeError:
+                messages.put(CodexAppServerError("Codex app-server returned invalid JSON"))
+                return
+            if not isinstance(message, dict):
+                messages.put(CodexAppServerError("Codex app-server returned a non-object message"))
+                return
+            messages.put(message)
+        messages.put(CodexAppServerError("Codex app-server closed its output"))
 
 
 def resolve_codex_binary(configured: str = "") -> str:

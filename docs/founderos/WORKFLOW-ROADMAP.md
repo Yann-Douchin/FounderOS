@@ -15,19 +15,27 @@ The dominant unit of work is not an assigned task. It is a decision or dependenc
 
 FounderOS should therefore rank decision debt, critical-path risk, follow-up promises, and meeting readiness. Counting unread items is not enough.
 
-## P0, build next
+## Closure foundation now shipped
+
+- Linear `portfolio` scope observes authorized team risk, retains the founder's own work, and collapses multiple relevant project issues into one outcome-level event.
+- Calendar promotes important meetings into a deterministic `PRÉPA` window 30 minutes before start.
+- Slack distinguishes urgent incidents, access or dependency waits, decision requests, and ordinary mentions.
+- Gmail separates explicit actions and important decisions from FYI billing mail and received artifacts.
+- Every one of these rules is local, configurable, explainable, and covered by regression tests. None invokes an LLM.
+
+## P0, deepen cross-source governance
 
 ### Decision debt detector
 
 Detect explicit requests that remain unresolved, record who owns the next move, count follow-ups, and increase urgency as the waiting time grows. Collapse repeated reminders into one event such as `Engineering decision blocked for 2 days`.
 
-### Critical-path rollup
+### Cross-source critical-path enrichment
 
-Roll up a Linear epic, its open children, owners, due dates, and blocked states into one founder-facing event. The title should state the outcome at risk, not repeat an issue title.
+Extend the shipped Linear project rollup with deployment, analytics, customer, and evidence state. The title should continue to state the outcome at risk, not repeat an issue title.
 
 ### Meeting readiness mode
 
-Thirty minutes before an important meeting, replace generic reminders with a compact brief assembled from the related Linear project, latest Slack decision, and unresolved email promise. After the meeting, suppress it and surface the next recorded commitment.
+The shipped 30-minute `PRÉPA` state provides the deterministic trigger. Enrich it with a compact brief assembled from the related Linear project, latest Slack decision, and unresolved email promise. After the meeting, suppress it and surface the next recorded commitment.
 
 ### Promise and follow-up radar
 
@@ -49,7 +57,7 @@ Attach compact proof to quality-gate events: environments checked, expected resu
 
 ### Physical acknowledge and snooze
 
-Permission requests now establish the safe input pattern: one selected event, one explicit `OK` or `BACK` decision, one-use local state, and a short timeout. The emulator input adapter is complete. General acknowledge, snooze, and open-source-link actions remain to be added, along with an official outbound button transport for physical hardware. External writes should remain explicit and separate.
+Trusted input can now acknowledge, snooze, and queue an open-source-link action. Permission requests add exact request binding, one-use state, and a short timeout. Emulator SSE remains untrusted development telemetry. A physical hardware adapter that emits the signed loopback contract is still a release gate because the documented display API has no host-readable button stream. External writes remain explicit and separate.
 
 ### Daily transition briefs
 

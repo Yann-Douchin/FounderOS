@@ -109,6 +109,31 @@ class RankingTests(unittest.TestCase):
         ranked = self.ranker.rank([blocker, permission], NOW)
         self.assertEqual(ranked[0].event, permission)
 
+    def test_permission_is_an_invariant_not_a_score_bonus(self) -> None:
+        permission = Event(
+            source="chatgpt_codex",
+            title="Autoriser Bash ?",
+            priority=1,
+            kind="permission_request",
+            occurred_at=NOW,
+        )
+        blocker = Event(
+            source="linear",
+            title="Production bloquée",
+            priority=100,
+            action_required=True,
+            kind="blocker",
+            urgency="critical",
+            impact="critical",
+            due_at=NOW - timedelta(days=1),
+            occurred_at=NOW,
+        )
+        tie_breaker = FakeTieBreaker(blocker.id)
+        engine = PriorityEngine(self.ranker, tie_breaker, tie_threshold=1000)
+        selected = engine.select([blocker, permission], NOW)
+        self.assertEqual(selected.event, permission)
+        self.assertEqual(tie_breaker.calls, 0)
+
     def test_old_event_receives_age_penalty(self) -> None:
         fresh = Event(id="gmail:fresh", source="gmail", title="Fresh", priority=50, occurred_at=NOW)
         old = Event(id="gmail:old", source="gmail", title="Old", priority=50, occurred_at=NOW - timedelta(hours=4))

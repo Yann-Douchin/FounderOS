@@ -35,7 +35,7 @@ agent PermissionRequest
           |
  deterministic priority event
           |
-  OK allow / BACK deny
+ signed, request-bound input
           |
  one-use decision file
           |
@@ -58,6 +58,8 @@ The minimum valid event is:
 ```
 
 The complete model also supports stable IDs, deduplication keys, kind, urgency, impact, timestamps, due and expiry times, confidence, URL, body, and connector metadata. Unknown feed fields are retained inside `metadata`.
+
+Source normalization is deliberately opinionated. Linear portfolio mode retains founder-owned work and allowlisted team risks, then collapses multiple project issues into one outcome event. Slack labels dependency and decision signals. Gmail separates actions from FYI mail and received artifacts. Calendar emits a deterministic readiness state for important meetings. These rules reduce source volume before global ranking and remain fully inspectable.
 
 ## Deterministic ranking
 
@@ -84,7 +86,7 @@ Memory provides three controls:
 - `snooze` suppresses it until a timestamp;
 - recent-display memory penalizes repeated interruptions while a small stickiness bonus prevents flicker.
 
-Memory is persisted as JSON under `.data/` and contains no credentials.
+Memory is persisted below the platform FounderOS state directory, outside the checkout, and contains no credentials. A newer occurrence with the same deduplication key resurfaces after acknowledgement. Corrupt sections are ignored safely, while age and entry-count limits bound growth.
 
 ## LLM boundary
 
@@ -108,13 +110,15 @@ POST /api/display/draw
 DELETE /api/display/draw?application_name=founderos
 ```
 
-Every draw contains `application_name`, `priority`, and `elements`. HTTP 409 is handled as a higher-priority owner, not as a crash. No emulator-only endpoint is required at runtime, so changing the host is enough to target real hardware.
+Every draw contains `application_name`, `priority`, and `elements`, plus API version and optional token headers. HTTP 409 is handled as a higher-priority owner. Structural layout changes clear the FounderOS application before drawing, which prevents stale merged elements on hardware.
 
 The renderer also chooses one of nine animated 8 by 8 icons from event semantics. Urgency and content keywords take precedence, while the connector source is only a fallback. Each frame redraws the same 64 one-pixel rectangles with stable IDs, using the background color for inactive pixels. This matches the physical firmware's element-merging behavior, stays below the 100-element request limit, and requires no emulator-specific asset or LLM call.
 
 Permission and agent-usage events use dedicated layouts. A permission request pulses its accent, shows a countdown, and reserves red and green answer rails. A usage event renders up to two deterministic quota bars. These layouts use only standard text and rectangle elements.
 
-The optional approval input adapter is the only emulator-specific runtime path. It consumes the emulator's SSE `/events` stream and is disabled by default. The physical HTTP API currently has no documented outbound button stream, so a real-device input transport must be added separately. This boundary does not affect display compatibility.
+Emulator SSE input is explicitly untrusted. The production adapter is a loopback HMAC endpoint that binds every key to the exact selected event and request, checks freshness, and rejects nonce replay. A physical transport must implement this contract because the display HTTP API has no documented outbound button stream.
+
+Trusted context is published only after the display confirms that exact event. It is removed before redraws, conflicts, and actions, so an invisible event cannot be acknowledged or approved.
 
 ## Package map
 

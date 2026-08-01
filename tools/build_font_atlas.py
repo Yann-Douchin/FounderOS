@@ -90,6 +90,18 @@ def rows_hex(ink, w):
     return res
 
 
+def fold_top_overflow(rows, top):
+    """Preserve overshooting accents without moving the glyph baseline."""
+    if top >= 0 or not rows:
+        return rows, top
+    overflow = min(-top, len(rows) - 1)
+    merged = 0
+    for row in rows[:overflow + 1]:
+        merged |= int(row, 16)
+    width = len(rows[0])
+    return [format(merged, f"0{width}x"), *rows[overflow + 1:]], 0
+
+
 def build(dirpath, *, use_typographic_metrics=False):
     info = json.load(open(os.path.join(dirpath, "font_info.json")))
     if use_typographic_metrics:
@@ -111,7 +123,8 @@ def build(dirpath, *, use_typographic_metrics=False):
         # bbox: x = left bearing, y = bottom offset from baseline (LVGL style)
         ox = bb["x"]
         top = ascent - (bb["y"] + bb["height"])
-        glyphs[str(code)] = {"adv": adv, "ox": ox, "oy": top, "w": iw, "h": ih, "rows": rows_hex(ink, iw)}
+        rows, top = fold_top_overflow(rows_hex(ink, iw), top)
+        glyphs[str(code)] = {"adv": adv, "ox": ox, "oy": top, "w": iw, "h": len(rows), "rows": rows}
     return {"ascent": ascent, "descent": descent, "lineh": lineh, "glyphs": glyphs}
 
 

@@ -23,7 +23,7 @@ class FakeResponse:
     def __exit__(self, exc_type, exc, traceback):
         return False
 
-    def read(self):
+    def read(self, size=-1):
         return b'{"result":"OK"}'
 
 
@@ -95,6 +95,12 @@ class DisplayTests(unittest.TestCase):
         missing = [character for character in required if str(ord(character)) not in atlas["global"]["glyphs"]]
         self.assertEqual(missing, [])
 
+    def test_french_accents_are_inside_the_visible_global_font_line(self) -> None:
+        atlas = json.loads((ROOT / "public/fonts/font-atlas.json").read_text(encoding="utf-8"))
+        glyphs = atlas["global"]["glyphs"]
+        self.assertTrue(all(glyph["oy"] >= 0 for glyph in glyphs.values()))
+        self.assertNotEqual(glyphs[str(ord("É"))]["rows"], glyphs[str(ord("E"))]["rows"])
+
     def test_due_time_wins_over_generic_action_label(self) -> None:
         event = Event(
             source="calendar",
@@ -123,6 +129,20 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(by_id["allow"]["text"], "OUI")
         self.assertLessEqual(len(frame), 100)
 
+    def test_accented_permission_keeps_allow_and_deny_affordances(self) -> None:
+        event = Event(
+            source="chatgpt_codex",
+            title="Déployer la version corrigée ?",
+            kind="permission_request",
+            action_required=True,
+            expires_at=datetime(2026, 8, 1, 10, 0, 45, tzinfo=UTC),
+        )
+        frame = event_layout(RankedEvent(event, 170, {}), NOW, icon_frame=0)
+        by_id = {element["id"]: element for element in frame}
+        self.assertEqual(by_id["deny"]["text"], "NON")
+        self.assertEqual(by_id["allow"]["text"], "OUI")
+        self.assertEqual(by_id["title"]["text"], "Déployer la version corrigée ?")
+
     def test_agent_usage_renders_two_quota_bars(self) -> None:
         event = Event(
             source="chatgpt_codex",
@@ -150,8 +170,14 @@ class DisplayTests(unittest.TestCase):
             calls.append(request)
             return FakeResponse()
 
-        display = BusyBarDisplay("127.0.0.1:8080", application_name="founderos", priority=90)
-        with patch("urllib.request.urlopen", side_effect=capture):
+        display = BusyBarDisplay(
+            "127.0.0.1:8080",
+            application_name="founderos",
+            priority=90,
+            api_token="device-secret",
+            api_semver="25.0.0",
+        )
+        with patch("founder_os.display.busybar._OPENER.open", side_effect=capture):
             display.draw([{"id": "t", "type": "text", "text": "HI", "x": 0, "y": 0}])
             display.clear()
         body = json.loads(calls[0].data.decode("utf-8"))
@@ -159,6 +185,8 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(calls[0].full_url, "http://127.0.0.1:8080/api/display/draw")
         self.assertEqual(body["application_name"], "founderos")
         self.assertEqual(body["priority"], 90)
+        self.assertEqual(calls[0].get_header("X-api-token"), "device-secret")
+        self.assertEqual(calls[0].get_header("X-api-sem-ver"), "25.0.0")
         self.assertEqual(calls[1].get_method(), "DELETE")
         self.assertEqual(
             calls[1].full_url,

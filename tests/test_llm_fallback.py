@@ -22,7 +22,10 @@ class LLMFallbackTests(unittest.TestCase):
             RankedEvent(Event(id="event:1", source="linear", title="One", occurred_at=datetime.now(UTC)), 90, {}),
             RankedEvent(Event(id="event:2", source="gmail", title="Two", occurred_at=datetime.now(UTC)), 89, {}),
         ]
-        with patch("urllib.request.urlopen", side_effect=urllib.error.URLError("offline")) as mocked:
+        with patch(
+            "founder_os.ranking.llm._OPENER.open",
+            side_effect=urllib.error.URLError("offline"),
+        ) as mocked:
             self.assertIsNone(fallback.choose(candidates))
             self.assertIsNone(fallback.choose(candidates))
             self.assertIsNone(fallback.choose(candidates))

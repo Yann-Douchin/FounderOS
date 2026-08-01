@@ -17,7 +17,7 @@ from founder_os.connectors.agents import AgentBridgeConnector
 from founder_os.connectors.registry import build_connectors
 from founder_os.core.runtime import FounderOSRuntime
 from founder_os.display.busybar import RecordingDisplay
-from founder_os.interaction import parse_sse
+from founder_os.interaction import InputEvent, parse_sse
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,8 +52,29 @@ class AgentBridgeTests(unittest.TestCase):
             )
             request_id = str(request["request_id"])
             self.assertEqual(store.pending_requests("claude", now=NOW)[0]["summary"], "Lancer les tests ?")
-            self.assertTrue(store.decide("claude", request_id, "allow", now=NOW))
+            self.assertTrue(
+                store.decide(
+                    "claude",
+                    request_id,
+                    "allow",
+                    input_key="ok",
+                    input_transport="signed_http",
+                    input_nonce="round-trip-nonce-0001",
+                    now=NOW,
+                )
+            )
             self.assertEqual(store.pending_requests("claude", now=NOW), [])
+            self.assertFalse(
+                store.decide(
+                    "claude",
+                    request_id,
+                    "deny",
+                    input_key="back",
+                    input_transport="signed_http",
+                    input_nonce="round-trip-nonce-0002",
+                    now=NOW,
+                )
+            )
             self.assertEqual(
                 store.wait_for_decision("claude", request_id, timeout_seconds=0.2, poll_seconds=0.01),
                 "allow",
@@ -151,7 +172,16 @@ class AgentBridgeTests(unittest.TestCase):
             state = runtime.tick(force_poll=True)
             self.assertEqual(state.selected.event.kind, "permission_request")
             self.assertIsNone(runtime.handle_input("up"))
-            self.assertEqual(runtime.handle_input("back"), "deny")
+            self.assertIsNone(runtime.handle_input("back"))
+            trusted = InputEvent(
+                key="back",
+                event_id=state.selected.event.id,
+                request_id=str(request["request_id"]),
+                trusted=True,
+                transport="signed_http",
+                nonce="test-nonce-0000001",
+            )
+            self.assertEqual(runtime.handle_input(trusted), "deny")
             self.assertEqual(
                 store.wait_for_decision(
                     "claude",
@@ -188,7 +218,14 @@ class AgentBridgeTests(unittest.TestCase):
                     while time.monotonic() < deadline and not stop.is_set():
                         request_id = store.latest_request_id(provider)
                         if request_id:
-                            store.decide(provider, request_id, "allow")
+                            store.decide(
+                                provider,
+                                request_id,
+                                "allow",
+                                input_key="ok",
+                                input_transport="signed_http",
+                                input_nonce="hook-test-nonce-0001",
+                            )
                             return
                         time.sleep(0.01)
 

@@ -17,6 +17,7 @@ SOURCE_COLORS = {
     "linkedin": "0x0A66C2FF",
     "claude": "0xD97745FF",
     "chatgpt_codex": "0x10A37FFF",
+    "founderos": "0xFFB020FF",
     "demo": "0x7C5CFCFF",
 }
 CRITICAL = "0xFF3C3CFF"
@@ -87,7 +88,7 @@ def event_layout(
     accent = CRITICAL if critical else ACTION if event.action_required else SOURCE_COLORS.get(event.source, WHITE)
     source_color = SOURCE_COLORS.get(event.source, accent)
     source_label = event.source.replace("chatgpt_codex", "CODEX").replace("calendar", "CAL").upper()[:8]
-    status = _due_label(event.due_at, now) if event.due_at else "ACT" if event.action_required else "NOW"
+    status = _due_label(event.due_at, now) if event.due_at else "SYNC" if event.kind == "connector_health" else "ACT" if event.action_required else "NOW"
     has_icon = icon_frame is not None
     title_x = 16 if has_icon else 6
     title_width = 72 - title_x
@@ -179,6 +180,8 @@ def permission_request_layout(
         rectangle("bg", 0, 0, 72, 16, BACKGROUND),
         rectangle("accent", 0, 0, 2, 16, pulse),
         text("source", source_label, x=4, y=0, font="tiny", color=source_color),
+        text("deny", "NON", x=26, y=0, font="tiny", color=CRITICAL),
+        text("allow", "OUI", x=44, y=0, font="tiny", color=IDLE),
         text("status", f"? {seconds}S", x=70, y=0, font="tiny", color=pulse, align="top_right"),
         text(
             "title",
@@ -193,13 +196,6 @@ def permission_request_layout(
         rectangle("deny-line", 3, 15, 32, 1, CRITICAL),
         rectangle("allow-line", 38, 15, 34, 1, IDLE),
     ]
-    if event.title.isascii():
-        elements.extend(
-            [
-                text("deny", "NON", x=4, y=11, font="tiny", color=CRITICAL),
-                text("allow", "OUI", x=69, y=11, font="tiny", color=IDLE, align="top_right"),
-            ]
-        )
     return elements
 
 

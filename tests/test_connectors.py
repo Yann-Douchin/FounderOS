@@ -2,9 +2,10 @@ from __future__ import annotations
 
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+from founder_os.connectors.base import ConnectorStaleError
 from founder_os.connectors.calendar import GoogleCalendarConnector
 from founder_os.connectors.feed import JsonlInboxConnector
 from founder_os.connectors.gmail import GmailConnector
@@ -20,12 +21,16 @@ NOW = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
 
 class ConnectorNormalizationTests(unittest.TestCase):
     def test_linear_blocker(self) -> None:
-        event = LinearConnector._normalize(
+        connector = LinearConnector.__new__(LinearConnector)
+        connector.timezone = "Europe/Madrid"
+        connector.active_event_ttl = timedelta(hours=48)
+        event = connector._normalize(
             {
                 "id": "issue-1",
                 "identifier": "QTY-142",
                 "title": "Quantity Fix blocked",
                 "priority": 1,
+                "dueDate": "2026-08-01",
                 "updatedAt": "2026-08-01T09:55:00Z",
                 "state": {"name": "Blocked", "type": "started"},
                 "team": {"key": "QTY"},
@@ -36,6 +41,15 @@ class ConnectorNormalizationTests(unittest.TestCase):
         self.assertEqual(event.kind, "blocker")
         self.assertEqual(event.urgency, "critical")
         self.assertTrue(event.action_required)
+        self.assertEqual(event.due_at, datetime(2026, 8, 1, 21, 59, 59, 999999, tzinfo=UTC))
+        self.assertGreater(event.expires_at, event.due_at)
+
+    def test_linear_unblocked_state_is_not_a_blocker(self) -> None:
+        issue = {
+            "state": {"name": "Unblocked", "type": "started"},
+            "labels": {"nodes": [{"name": "Ready"}]},
+        }
+        self.assertFalse(LinearConnector._is_blocked(issue))
 
     def test_slack_mention(self) -> None:
         connector = SlackConnector.__new__(SlackConnector)
@@ -50,6 +64,17 @@ class ConnectorNormalizationTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertTrue(event.action_required)
         self.assertEqual(event.kind, "blocker")
+
+    def test_slack_dependency_signal_surfaces_without_a_founder_mention(self) -> None:
+        connector = SlackConnector.__new__(SlackConnector)
+        connector.channel_names = {"C1": "launch"}
+        connector.mention_markers = ["<@founder>"]
+        connector.urgent_keywords = ["blocked"]
+        message = {"ts": "1785578100.000000", "text": "Waiting for merchant access"}
+        event = connector._normalize("C1", message, NOW)
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, "waiting")
+        self.assertEqual(event.metadata["signal"], "dependency")
 
     def test_gmail_preserves_accented_sender(self) -> None:
         connector = GmailConnector.__new__(GmailConnector)
@@ -73,8 +98,54 @@ class ConnectorNormalizationTests(unittest.TestCase):
         self.assertIn("Décision", event.title)
         self.assertEqual(event.urgency, "high")
 
+    def test_gmail_does_not_treat_an_important_invoice_as_an_action(self) -> None:
+        connector = GmailConnector.__new__(GmailConnector)
+        connector.vip_senders = set()
+        event = connector._normalize(
+            self._gmail_message("invoice", "Facture et reçu de paiement", important=True),
+            NOW,
+        )
+        self.assertFalse(event.action_required)
+        self.assertEqual(event.metadata["classification"], "fyi")
+        self.assertEqual(event.priority, 34)
+
+    def test_gmail_respects_explicit_non_action_language(self) -> None:
+        connector = GmailConnector.__new__(GmailConnector)
+        connector.vip_senders = set()
+        event = connector._normalize(
+            self._gmail_message("fyi", "Décision publiée, aucune action requise", important=True),
+            NOW,
+        )
+        self.assertFalse(event.action_required)
+        self.assertEqual(event.metadata["classification"], "fyi")
+
+    def test_gmail_vip_matching_rejects_address_substrings(self) -> None:
+        connector = GmailConnector.__new__(GmailConnector)
+        connector.vip_senders = {"ceo@example.test"}
+        self.assertTrue(connector._is_vip_sender("ceo@example.test"))
+        self.assertFalse(connector._is_vip_sender("not-ceo@example.test"))
+
+    @staticmethod
+    def _gmail_message(message_id: str, subject: str, *, important: bool = False) -> dict:
+        labels = ["UNREAD", "IMPORTANT"] if important else ["UNREAD"]
+        return {
+            "id": message_id,
+            "internalDate": "1785578100000",
+            "labelIds": labels,
+            "payload": {"headers": [
+                {"name": "Subject", "value": subject},
+                {"name": "From", "value": "billing@example.test"},
+            ]},
+        }
+
+    def test_gmail_detects_nested_attachment_metadata(self) -> None:
+        payload = {"parts": [{"parts": [{"filename": "pièce-comptable.pdf"}]}]}
+        self.assertTrue(GmailConnector._has_attachment(payload))
+
     def test_calendar_near_term_event(self) -> None:
-        event = GoogleCalendarConnector._normalize(
+        connector = GoogleCalendarConnector.__new__(GoogleCalendarConnector)
+        connector.timezone = "Europe/Madrid"
+        event = connector._normalize(
             {
                 "id": "cal-1",
                 "summary": "Comité stratégie",
@@ -86,8 +157,29 @@ class ConnectorNormalizationTests(unittest.TestCase):
             },
             NOW,
         )
-        self.assertEqual(event.title, "Comité stratégie")
+        self.assertEqual(event.title, "PRÉPA Comité stratégie")
         self.assertEqual(event.urgency, "high")
+        self.assertTrue(event.metadata["readiness"])
+
+    def test_calendar_all_day_event_is_not_dropped_or_marked_overdue(self) -> None:
+        connector = GoogleCalendarConnector.__new__(GoogleCalendarConnector)
+        connector.timezone = "Europe/Madrid"
+        event = connector._normalize(
+            {
+                "id": "cal-all-day",
+                "summary": "Journée stratégie",
+                "status": "confirmed",
+                "updated": "2026-08-01T09:00:00Z",
+                "start": {"date": "2026-08-01"},
+                "end": {"date": "2026-08-02"},
+            },
+            NOW,
+        )
+        self.assertIsNotNone(event)
+        self.assertEqual(event.kind, "calendar_all_day")
+        self.assertIsNone(event.due_at)
+        self.assertEqual(event.expires_at, datetime(2026, 8, 1, 22, 0, tzinfo=UTC))
+        self.assertTrue(event.metadata["all_day"])
 
     def test_jsonl_inbox_waits_for_complete_line(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -151,7 +243,8 @@ class ConnectorNormalizationTests(unittest.TestCase):
                 },
                 source="slack",
             )
-            self.assertEqual(connector.poll(NOW), [])
+            with self.assertRaises(ConnectorStaleError):
+                connector.poll(NOW)
 
     def test_registry_builds_snapshot_without_api_secret(self) -> None:
         connectors = build_connectors(

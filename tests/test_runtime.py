@@ -9,6 +9,7 @@ from unittest.mock import patch
 from founder_os.config import load_config
 from founder_os.core.runtime import FounderOSRuntime
 from founder_os.display.busybar import RecordingDisplay
+from founder_os.interaction import InputEvent
 from founder_os.models import Event, RankedEvent
 
 
@@ -91,6 +92,100 @@ class RuntimeTests(unittest.TestCase):
             self.assertFalse(
                 any(element["id"].startswith("icon-") for element in display.frames[0])
             )
+
+    def test_trusted_normal_actions_acknowledge_snooze_and_open(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={
+                    "memory": {"path": str(Path(folder) / "memory.json")},
+                    "interaction": {"action_outbox_path": str(Path(folder) / "actions")},
+                }
+            )
+            runtime = FounderOSRuntime(config, display=RecordingDisplay())
+            try:
+                event = Event(source="linear", id="linear:ack", title="À arbitrer", occurred_at=NOW)
+                runtime.bus.publish(event)
+                state = runtime.tick(NOW, force_poll=True)
+                trusted = InputEvent(
+                    key="ok",
+                    event_id=state.selected.event.id,
+                    trusted=True,
+                    transport="signed_http",
+                )
+                self.assertEqual(runtime.handle_input(trusted), "acknowledge")
+                self.assertFalse(any(item.id == event.id for item in runtime.bus.active(NOW)))
+
+                snoozed = Event(source="gmail", id="gmail:snooze", title="Répondre", occurred_at=NOW)
+                runtime.bus.publish(snoozed)
+                state = runtime.tick(NOW)
+                trusted = InputEvent(
+                    key="back",
+                    event_id=state.selected.event.id,
+                    trusted=True,
+                    transport="signed_http",
+                )
+                self.assertEqual(runtime.handle_input(trusted), "snooze")
+                self.assertTrue(runtime.memory.is_suppressed(snoozed, NOW))
+
+                linked = Event(
+                    source="slack",
+                    id="slack:open",
+                    title="Ouvrir le fil",
+                    url="https://example.test/thread",
+                    occurred_at=NOW,
+                )
+                runtime.bus.publish(linked)
+                state = runtime.tick(NOW)
+                trusted = InputEvent(
+                    key="custom",
+                    event_id=state.selected.event.id,
+                    trusted=True,
+                    transport="signed_http",
+                )
+                self.assertEqual(runtime.handle_input(trusted), "open")
+                pending = Path(folder) / "actions" / "pending"
+                self.assertEqual(len(list(pending.glob("*.json"))), 1)
+            finally:
+                runtime.close()
+
+    def test_layout_transition_clears_merged_hardware_elements(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(overrides={"memory": {"path": str(Path(folder) / "memory.json")}})
+            display = RecordingDisplay()
+            runtime = FounderOSRuntime(config, display=display)
+            first = RankedEvent(Event(source="linear", title="Décision à prendre"), 90, {})
+            second = RankedEvent(
+                Event(source="claude", title="Autoriser Bash ?", kind="permission_request"),
+                170,
+                {},
+            )
+            try:
+                with patch("founder_os.core.runtime.time.monotonic", side_effect=(10.1, 11.1)):
+                    runtime._render(first, NOW)
+                    runtime._render(second, NOW)
+                operations = [operation[0] for operation in display.operations]
+                self.assertEqual(operations, ["draw", "clear", "draw"])
+            finally:
+                runtime.close()
+
+    def test_permission_bypasses_the_display_hold(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(overrides={"memory": {"path": str(Path(folder) / "memory.json")}})
+            runtime = FounderOSRuntime(config, display=RecordingDisplay())
+            blocker = RankedEvent(Event(source="linear", id="linear:block", title="Blocage"), 120, {})
+            permission = RankedEvent(
+                Event(source="chatgpt_codex", id="codex:permission", title="Autoriser ?", kind="permission_request"),
+                1,
+                {},
+            )
+            runtime._selected = blocker
+            runtime._selected_since = 100
+            runtime.bus.publish(blocker.event)
+            try:
+                with patch("founder_os.core.runtime.time.monotonic", return_value=101):
+                    self.assertEqual(runtime._respect_hold(permission, NOW), permission)
+            finally:
+                runtime.close()
 
 
 if __name__ == "__main__":

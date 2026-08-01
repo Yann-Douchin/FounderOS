@@ -11,7 +11,7 @@
   },
   "interaction": {
     "enabled": false,
-    "mode": "emulator_sse",
+    "mode": "signed_http",
     "allow_key": "ok",
     "deny_key": "back"
   },
@@ -32,6 +32,8 @@
       "enabled": false,
       "mode": "api",
       "token_env": "LINEAR_API_KEY",
+      "auth_scheme": "api_key",
+      "scope": "assigned",
       "team_keys": [],
       "poll_interval_seconds": 30
     },
@@ -69,7 +71,6 @@
     "claude": {
       "enabled": false,
       "mode": "agent_bridge",
-      "state_dir": ".data/agents",
       "usage": {
         "mode": "snapshot",
         "ttl_seconds": 900
@@ -79,7 +80,6 @@
     "chatgpt_codex": {
       "enabled": false,
       "mode": "agent_bridge",
-      "state_dir": ".data/agents",
       "usage": {
         "mode": "codex_app_server",
         "codex_binary": "",

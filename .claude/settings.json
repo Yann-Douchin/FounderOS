@@ -27,7 +27,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 \"$CLAUDE_PROJECT_DIR/apps/agent_permission_hook.py\" --provider claude --state-dir \"$CLAUDE_PROJECT_DIR/.data/agents\" --timeout 45"
+            "command": "python3 \"$CLAUDE_PROJECT_DIR/apps/agent_permission_hook.py\" --provider claude --timeout 45"
           }
         ]
       }

@@ -18,9 +18,13 @@ class PriorityEngine:
         self.llm_fallback_calls = 0
 
     def select(self, events: Iterable[Event], now: datetime | None = None) -> RankedEvent | None:
-        ranked = self.ranker.rank(events, now or utc_now())
+        values = list(events)
+        permissions = [event for event in values if event.kind == "permission_request"]
+        ranked = self.ranker.rank(permissions or values, now or utc_now())
         if not ranked:
             return None
+        if permissions:
+            return ranked[0]
         contenders = [ranked[0]]
         for candidate in ranked[1:]:
             if ranked[0].score - candidate.score <= self.tie_threshold:

@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -15,6 +14,7 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from founder_os.agents.bridge import AgentBridgeError, BridgeStore  # noqa: E402
+from founder_os.paths import agent_state_root  # noqa: E402
 
 
 def parse_args() -> argparse.Namespace:
@@ -22,7 +22,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--provider", required=True, choices=("claude", "chatgpt_codex"))
     parser.add_argument(
         "--state-dir",
-        default=os.environ.get("FOUNDEROS_AGENT_STATE_DIR", ".data/agents"),
+        default=str(agent_state_root()),
     )
     parser.add_argument("--timeout", type=float, default=45.0)
     return parser.parse_args()

@@ -8,8 +8,9 @@ from typing import Any, Mapping
 
 from founder_os.agents.bridge import BridgeStore
 from founder_os.agents.codex import CodexAppServerClient, CodexAppServerError, normalize_rate_limits
-from founder_os.connectors.base import Connector
+from founder_os.connectors.base import Connector, ConnectorConfigurationError
 from founder_os.models import Event, parse_datetime
+from founder_os.paths import agent_state_root
 
 
 class AgentBridgeConnector(Connector):
@@ -19,10 +20,18 @@ class AgentBridgeConnector(Connector):
         super().__init__(config)
         self.name = source
         self.source = source
-        self.store = BridgeStore(Path(str(config.get("state_dir", ".data/agents"))))
+        configured_state = str(config.get("state_dir", "")).strip()
+        self.store = BridgeStore(Path(configured_state) if configured_state else agent_state_root())
         usage = config.get("usage")
         self.usage_config = dict(usage) if isinstance(usage, Mapping) else {}
         self.usage_mode = str(self.usage_config.get("mode", "snapshot")).strip().lower()
+        supported_modes = {"", "disabled", "none", "snapshot"}
+        if self.source == "chatgpt_codex":
+            supported_modes.add("codex_app_server")
+        if self.usage_mode not in supported_modes:
+            raise ConnectorConfigurationError(
+                f"unsupported {self.source} usage mode: {self.usage_mode or '<empty>'}"
+            )
         self.usage_refresh_seconds = max(
             self.poll_interval_seconds,
             float(self.usage_config.get("refresh_seconds", 60)),
@@ -45,10 +54,27 @@ class AgentBridgeConnector(Connector):
         usage = self._read_usage(now)
         if usage:
             events.append(self._usage_event(usage))
+        elif self.last_usage_error:
+            events.append(self._usage_health_event(now))
         return events
 
-    def decide(self, request_id: str, decision: str, *, input_key: str = "") -> bool:
-        return self.store.decide(self.source, request_id, decision, input_key=input_key)
+    def decide(
+        self,
+        request_id: str,
+        decision: str,
+        *,
+        input_key: str = "",
+        input_transport: str = "",
+        input_nonce: str = "",
+    ) -> bool:
+        return self.store.decide(
+            self.source,
+            request_id,
+            decision,
+            input_key=input_key,
+            input_transport=input_transport,
+            input_nonce=input_nonce,
+        )
 
     def close(self) -> None:
         if self._codex:
@@ -69,9 +95,11 @@ class AgentBridgeConnector(Connector):
                     now=now,
                     ttl_seconds=float(self.usage_config.get("ttl_seconds", 120)),
                 )
-                self.last_usage_error = ""
-                self._cached_usage = usage
-                return usage
+                if usage:
+                    self.last_usage_error = ""
+                    self._cached_usage = usage
+                    return usage
+                self.last_usage_error = "Codex rate limit response contained no supported usage window"
             except CodexAppServerError as exc:
                 self.last_usage_error = str(exc)
                 if self._cached_usage and cached_expiry and cached_expiry > now:
@@ -106,7 +134,7 @@ class AgentBridgeConnector(Connector):
         label = "Claude" if self.source == "claude" else "ChatGPT / Codex"
         return Event(
             id=f"{self.source}:usage",
-            dedupe_key="usage",
+            dedupe_key=f"{self.source}:usage",
             source=self.source,
             title=f"Utilisation {label}",
             priority=18,
@@ -120,5 +148,27 @@ class AgentBridgeConnector(Connector):
                 "provider": self.source,
                 "plan_type": str(record.get("plan_type") or ""),
                 "windows": list(record.get("windows") or []),
+            },
+        )
+
+    def _usage_health_event(self, now: datetime) -> Event:
+        label = "Claude" if self.source == "claude" else "Codex"
+        return Event(
+            id=f"founderos:agent-usage-health:{self.source}",
+            dedupe_key=f"agent-usage-health:{self.source}",
+            source="founderos",
+            title=f"Utilisation {label} indisponible",
+            body=self.last_usage_error,
+            priority=62,
+            action_required=True,
+            kind="connector_health",
+            urgency="high",
+            impact="low",
+            occurred_at=now,
+            expires_at=now + timedelta(seconds=max(60.0, self.usage_refresh_seconds * 2)),
+            metadata={
+                "connector": self.source,
+                "component": "usage",
+                "status": "degraded",
             },
         )

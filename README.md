@@ -22,7 +22,7 @@
 </p>
 
 <p align="center">
-  <img src="docs/founderos/captures/linear-blocker-browser.jpg" width="720" alt="FounderOS showing a critical Linear blocker on the BUSY Bar emulator" />
+  <img src="docs/founderos/captures/linear-blocker.png" width="720" alt="FounderOS showing a critical Linear blocker on the BUSY Bar emulator" />
 </p>
 
 ---
@@ -75,18 +75,20 @@ FounderOS includes:
 
 - deterministic, explainable ranking with persistent deduplication memory;
 - Linear, Slack, Gmail, Google Calendar, LinkedIn bridge, Claude, and ChatGPT/Codex connectors;
+- governed Linear portfolio scope with bounded pagination and project-risk rollups;
+- deterministic Gmail action/FYI classification, Slack dependency signals, and Calendar readiness mode;
 - reserved, disabled-by-default entries for GitHub, Stripe, Shopify, and Home Assistant;
 - zero LLM calls in the normal loop;
 - an optional OpenAI Responses API fallback only for close ties;
 - deterministic, content-aware animated icons for alerts, meetings, messages, code, growth, decisions, tasks, and focus;
 - live Codex quota bars through the official local app-server interface;
-- one-time Claude and Codex permission decisions with a 45-second fail-safe timeout;
+- request-bound Claude and Codex permission decisions with a 45-second fail-safe timeout;
 - layouts constrained and tested against the exact BUSY Bar HTTP draw contract;
-- an expiring Codex snapshot bridge for progressively replacing gallery fixtures with real authorized connector data without exposing OAuth tokens.
+- concurrent source health, direct API connectors, in-memory Google OAuth refresh, and a governed snapshot bridge for authorized connector data.
 
 ```bash
 # Inspect the decision and frame without touching the display
-python3 apps/founderos.py --demo --dry-run --once --explain
+python3 apps/founderos.py --demo --dry-run --once --explain --frame-json
 
 # Run the complete test suite
 npm test
@@ -100,12 +102,12 @@ The project-local Claude and Codex hooks are already tracked. Enable both agent 
 python3 apps/founderos.py --config founderos.local.json
 ```
 
-On an approval screen, emulator button `OK` allows the current request once and `BACK` denies it. Codex users must review the project hook with `/hooks` before its first use. See [Claude and ChatGPT/Codex configuration](docs/founderos/CONFIGURATION.md#claude-and-chatgptcodex) for the complete setup and the physical-device input boundary.
+Emulator SSE is intentionally untrusted and cannot approve anything. Production input uses the loopback HMAC bridge in `apps/founderos_input.py`, bound to the exact selected event and request. Codex users must review the project hook with `/hooks` before its first use. See [Claude and ChatGPT/Codex configuration](docs/founderos/CONFIGURATION.md#claude-and-chatgptcodex) and the [production closure register](docs/founderos/PRODUCTION-CLOSURE.md).
 
 The prioritized product direction based on real founder workflows is documented in the [workflow roadmap](docs/founderos/WORKFLOW-ROADMAP.md).
 
 <p align="center">
-  <img src="docs/founderos/captures/founderos-gallery.png" width="720" alt="Five FounderOS display states: Linear, Calendar, Gmail, Slack, and all clear" />
+  <img src="docs/founderos/captures/gmail.png" width="720" alt="FounderOS preserving French accents in a Gmail decision" />
 </p>
 
 <p align="center">

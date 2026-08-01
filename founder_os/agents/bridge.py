@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Iterable, Mapping
 
 from founder_os.models import parse_datetime, utc_now
+from founder_os.paths import agent_state_root, ensure_private_directory
 
 
 PROVIDERS = frozenset({"claude", "chatgpt_codex"})
@@ -64,8 +65,8 @@ def summarize_permission(payload: Mapping[str, Any]) -> tuple[str, str]:
 class BridgeStore:
     """Atomic request, decision, and usage snapshots under one private root."""
 
-    def __init__(self, root: str | Path) -> None:
-        self.root = Path(root).expanduser()
+    def __init__(self, root: str | Path | None = None) -> None:
+        self.root = Path(root).expanduser() if root else agent_state_root()
 
     def create_permission_request(
         self,
@@ -102,7 +103,7 @@ class BridgeStore:
             "created_at": now.isoformat(),
             "expires_at": (now + timedelta(seconds=timeout_seconds)).isoformat(),
         }
-        _atomic_write_json(self._request_path(provider, request_id), record)
+        _atomic_create_json(self._request_path(provider, request_id), record)
         return record
 
     def pending_requests(
@@ -126,6 +127,8 @@ class BridgeStore:
                 continue
             expires_at = _safe_datetime(record.get("expires_at"))
             if expires_at is None or expires_at <= now:
+                path.unlink(missing_ok=True)
+                self._decision_path(provider, request_id).unlink(missing_ok=True)
                 continue
             records.append(record)
         records.sort(key=lambda item: str(item.get("created_at", "")), reverse=True)
@@ -138,6 +141,8 @@ class BridgeStore:
         decision: str,
         *,
         input_key: str = "",
+        input_transport: str = "",
+        input_nonce: str = "",
         now: datetime | None = None,
     ) -> bool:
         provider = normalize_provider(provider)
@@ -146,22 +151,39 @@ class BridgeStore:
             raise AgentBridgeError(f"unsupported decision: {decision or '<empty>'}")
         request_id = _safe_request_id(request_id)
         now = now or utc_now()
+        input_transport = input_transport.strip().lower()
+        input_key = input_key.strip().lower()
+        input_nonce = input_nonce.strip()
+        if input_transport != "signed_http":
+            return False
+        if not re.fullmatch(r"[a-z0-9_-]{1,32}", input_key):
+            return False
+        if not re.fullmatch(r"[A-Za-z0-9_-]{16,128}", input_nonce):
+            return False
         request = _read_json(self._request_path(provider, request_id))
         if not request or request.get("provider") != provider:
             return False
         expires_at = _safe_datetime(request.get("expires_at"))
         if expires_at is None or expires_at <= now:
             return False
+        decision_path = self._decision_path(provider, request_id)
+        if decision_path.exists():
+            return False
         record = {
             "schema_version": SCHEMA_VERSION,
             "request_id": request_id,
             "provider": provider,
             "decision": decision,
-            "input_key": input_key.strip(),
+            "input_key": input_key,
+            "input_transport": input_transport,
+            "input_nonce": input_nonce,
             "decided_at": now.isoformat(),
         }
-        _atomic_write_json(self._decision_path(provider, request_id), record)
-        return True
+        try:
+            _atomic_create_json(decision_path, record)
+            return True
+        except FileExistsError:
+            return False
 
     def wait_for_decision(
         self,
@@ -175,13 +197,32 @@ class BridgeStore:
         request_id = _safe_request_id(request_id)
         request_path = self._request_path(provider, request_id)
         decision_path = self._decision_path(provider, request_id)
+        request = _read_json(request_path)
+        if not request or request.get("provider") != provider:
+            return None
+        created_at = _safe_datetime(request.get("created_at"))
+        expires_at = _safe_datetime(request.get("expires_at"))
+        if created_at is None or expires_at is None or created_at >= expires_at:
+            return None
         deadline = time.monotonic() + max(0.0, float(timeout_seconds))
         try:
             while time.monotonic() < deadline:
                 record = _read_json(decision_path)
-                if record and record.get("request_id") == request_id:
+                if (
+                    record
+                    and record.get("request_id") == request_id
+                    and record.get("provider") == provider
+                    and record.get("schema_version") == SCHEMA_VERSION
+                    and record.get("input_transport") == "signed_http"
+                    and re.fullmatch(r"[A-Za-z0-9_-]{16,128}", str(record.get("input_nonce", "")))
+                ):
                     decision = str(record.get("decision", "")).strip().lower()
-                    if decision in DECISIONS:
+                    decided_at = _safe_datetime(record.get("decided_at"))
+                    if (
+                        decision in DECISIONS
+                        and decided_at is not None
+                        and created_at <= decided_at <= expires_at
+                    ):
                         return decision
                 time.sleep(max(0.01, min(float(poll_seconds), deadline - time.monotonic())))
             return None
@@ -273,11 +314,7 @@ def _normalize_window(value: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    try:
-        path.parent.chmod(0o700)
-    except OSError:
-        pass
+    ensure_private_directory(path.parent)
     fd, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
     temporary_path = Path(temporary_name)
     try:
@@ -288,8 +325,27 @@ def _atomic_write_json(path: Path, payload: Mapping[str, Any]) -> None:
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary_path, path)
+        try:
+            path.chmod(0o600)
+        except OSError:
+            pass
     finally:
         temporary_path.unlink(missing_ok=True)
+
+
+def _atomic_create_json(path: Path, payload: Mapping[str, Any]) -> None:
+    ensure_private_directory(path.parent)
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
+    descriptor = os.open(path, flags, 0o600)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
+            json.dump(payload, stream, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
 
 
 def _read_json(path: Path) -> dict[str, Any] | None:

@@ -7,7 +7,15 @@ cp founderos.example.json founderos.local.json
 python3 apps/founderos.py --config founderos.local.json
 ```
 
-`founderos.local.json` and `.data/` are ignored by Git. Do not put access tokens directly in JSON.
+`founderos.local.json` and legacy `.data/` are ignored by Git. Runtime state defaults to the platform application-state directory, for example `~/Library/Application Support/FounderOS` on macOS. Do not put access tokens directly in JSON.
+
+Before starting the long-running process, execute a live connector preflight. It polls every enabled source once and exits with code `3` unless all report `healthy`:
+
+```bash
+python3 apps/founderos.py --config founderos.local.json --once --dry-run --require-healthy
+```
+
+Production one-shot runs enforce the same rule automatically for every connector marked `critical`.
 
 ## Content-aware animated icon
 
@@ -28,7 +36,7 @@ FounderOS reserves an 8 by 8 pixel area beside the selected task. The icon is ch
 
 ## Codex connector bridge
 
-Use snapshot mode when Linear, Slack, Gmail, or Google Calendar is already authorized as a Codex app, but its OAuth token must not be exposed to a local subprocess. Codex reads the authorized source, normalizes only the useful events, and writes a private snapshot under `.data/connectors/`.
+Use snapshot mode for a user-triggered transfer from an authorized app when its OAuth token cannot be exposed to a subprocess. Publish the normalized event array with `apps/founderos_snapshot.py`. It writes atomically below `FOUNDEROS_STATE_DIR`.
 
 ```json
 {
@@ -37,8 +45,8 @@ Use snapshot mode when Linear, Slack, Gmail, or Google Calendar is already autho
     "linear": {
       "enabled": true,
       "mode": "snapshot",
-      "snapshot_path": ".data/connectors/linear.json",
-      "max_snapshot_age_minutes": 1440,
+      "snapshot_path": "/absolute/private/state/connectors/linear.json",
+      "max_snapshot_age_minutes": 10,
       "poll_interval_seconds": 30
     }
   }
@@ -68,8 +76,8 @@ Each snapshot is a complete source state:
 Snapshot mode has three safety properties:
 
 - OAuth credentials stay inside the authorized connector.
-- `.data/` and `founderos.local.json` remain outside Git.
-- a snapshot older than `max_snapshot_age_minutes` returns no events, so stale private data cannot masquerade as a current decision.
+- private state remains outside Git and the iCloud checkout.
+- a missing or stale snapshot creates a source-health incident while the last known events remain available. It cannot produce a false `ALL CLEAR`.
 
 This bridge is appropriate for progressive, user-triggered synchronization. For an autonomous background service, keep `mode` set to `api` and configure the least-privilege credentials described below.
 
@@ -86,15 +94,33 @@ python3 apps/founderos.py --demo --scenario clear
 
 ## Linear
 
-Set `LINEAR_API_KEY` and enable the connector. Personal API keys and OAuth bearer tokens are accepted by Linear's GraphQL endpoint.
+Set `LINEAR_API_KEY` and enable the connector. Personal API keys are sent as the raw `Authorization` value required by Linear. For an OAuth access token, set `auth_scheme` to `bearer`.
 
 ```bash
 export LINEAR_API_KEY='...'
 ```
 
-Optional `team_keys` restricts assigned issues to selected teams. Empty means all teams. The connector reads active issues assigned to the authenticated user and never mutates them.
+Use `assigned` scope for a personal queue. Use `portfolio` scope for founder oversight of explicitly authorized teams:
 
-Reference: [Linear GraphQL authentication](https://linear.app/developers/graphql).
+```json
+{
+  "linear": {
+    "enabled": true,
+    "mode": "api",
+    "token_env": "LINEAR_API_KEY",
+    "auth_scheme": "api_key",
+    "scope": "portfolio",
+    "team_keys": ["BUSY"],
+    "portfolio_priority_ceiling": 2,
+    "portfolio_due_horizon_days": 14,
+    "rollup_projects": true
+  }
+}
+```
+
+Portfolio scope retains issues assigned to the authenticated user and adds team issues that are blocked, urgent or high priority, or due inside the configured horizon. Two or more relevant issues in the same project collapse into one project-risk event with the earliest deadline and current owners. Pagination is bounded by `page_size`, `max_issues`, `max_pages`, and the total poll deadline. FounderOS never mutates Linear.
+
+References: [Linear GraphQL authentication](https://linear.app/developers/graphql), [filtering](https://linear.app/developers/filtering), and [pagination](https://linear.app/developers/pagination).
 
 ## Slack
 
@@ -113,20 +139,22 @@ Set `SLACK_BOT_TOKEN`, list the conversation IDs to watch, and grant the corresp
 }
 ```
 
-`mention_markers` limits ordinary messages to explicit founder mentions. Urgent keywords still pass. The 60-second default respects the restrictive rate tier documented for some newly distributed Slack apps.
+`mention_markers` limits ordinary messages to explicit founder mentions. Urgent incidents, dependency phrases such as `waiting for` or `need access`, and explicit decision requests still pass. These signal dictionaries are configurable through `urgent_keywords`, `risk_keywords`, and `decision_keywords`. Every surfaced message records the matched signal, and pagination plus the total poll deadline are bounded. The 60-second default respects the restrictive rate tier documented for some newly distributed Slack apps.
 
 Reference: [Slack `conversations.history`](https://docs.slack.dev/reference/methods/conversations.history/).
 
 ## Gmail and Google Calendar
 
-Set `GOOGLE_ACCESS_TOKEN` to an OAuth access token and enable either connector. FounderOS only makes GET requests.
+For a short run, set `GOOGLE_ACCESS_TOKEN`. For an autonomous service, configure `GOOGLE_REFRESH_TOKEN`, `GOOGLE_CLIENT_ID`, and `GOOGLE_CLIENT_SECRET`. FounderOS refreshes access tokens in memory and never persists them.
 
 Recommended least-privilege scopes:
 
 - Gmail: `https://www.googleapis.com/auth/gmail.readonly`
 - Calendar: `https://www.googleapis.com/auth/calendar.events.readonly`
 
-The V1 runtime consumes an already-issued access token. Long-running installations should renew that token through their existing OAuth service and update the environment before restart.
+Gmail message metadata is fetched concurrently with bounded workers and a total poll deadline. Unread mail is not automatically actionable. A deterministic classifier separates explicit requests, important messages, received attachments, and informational mail such as invoices, receipts, refunds, and newsletters. Explicit phrases such as `aucune action requise` override embedded action words. VIP entries match an exact address or an exact domain, never an address substring. Tune the classifier with `vip_senders`, `action_keywords`, `non_action_keywords`, `fyi_keywords`, and `urgent_keywords`.
+
+Calendar includes timed and all-day events. Meetings whose titles match `readiness_keywords` become a `PRÉPA` action during the configurable 30-minute readiness window. This gives launch, customer, investor, contract, and strategy boundaries precedence without calling a model. Calendar follows page tokens up to `max_events`, `max_pages`, and one total poll deadline. Both Google connectors invalidate and refresh once after an HTTP `401` when refresh credentials are available.
 
 References: [Gmail scopes](https://developers.google.com/identity/protocols/oauth2/scopes#gmail), [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
 
@@ -155,13 +183,16 @@ References: [LinkedIn API access](https://learn.microsoft.com/en-us/linkedin/sha
 
 ## Claude and ChatGPT/Codex
 
-Both agents use the same private, local bridge. Their official `PermissionRequest` hooks create an expiring request under `.data/agents/`. FounderOS ranks that request above ordinary blockers and displays only its redacted summary. A response writes one atomic decision file that the waiting hook consumes immediately.
+Both agents use the same private local bridge. Their `PermissionRequest` hooks create an expiring request below the platform FounderOS state directory. FounderOS gives active permissions strict precedence and displays only a redacted summary. A response creates one exclusive decision file that the waiting hook consumes immediately.
 
 ```json
 {
   "interaction": {
     "enabled": true,
-    "mode": "emulator_sse",
+    "mode": "signed_http",
+    "listen_host": "127.0.0.1",
+    "listen_port": 8765,
+    "secret_env": "FOUNDEROS_INPUT_SECRET",
     "allow_key": "ok",
     "deny_key": "back"
   },
@@ -169,14 +200,12 @@ Both agents use the same private, local bridge. Their official `PermissionReques
     "claude": {
       "enabled": true,
       "mode": "agent_bridge",
-      "state_dir": ".data/agents",
       "usage": {"mode": "snapshot"},
       "poll_interval_seconds": 2
     },
     "chatgpt_codex": {
       "enabled": true,
       "mode": "agent_bridge",
-      "state_dir": ".data/agents",
       "usage": {
         "mode": "codex_app_server",
         "codex_binary": "",
@@ -197,14 +226,15 @@ The repository includes both hook definitions:
 
 The safety behavior is identical for both agents:
 
-- `OK` returns `behavior: allow` for this request only.
-- `BACK` returns `behavior: deny` with a short reason.
+- a trusted `OK` input returns `behavior: allow` for the exact request only.
+- a trusted `BACK` input returns `behavior: deny` with a short reason.
+- unsigned, replayed, expired, or context-mismatched input is ignored.
 - no permanent permission rule is written;
 - request details are reduced to a short summary and common secret patterns are masked;
-- if FounderOS, the emulator input stream, or the response is unavailable for 45 seconds, the hook returns no decision and the agent resumes its normal approval prompt;
+- if FounderOS or the trusted input adapter is unavailable for 45 seconds, the hook returns no decision and the agent resumes its normal approval prompt;
 - an existing deny or ask policy still takes precedence over an allow decision.
 
-The hook output follows the official formats documented by [Claude Code PermissionRequest hooks](https://code.claude.com/docs/en/hooks#permissionrequest) and [Codex hooks](https://developers.openai.com/codex/hooks/).
+The hook output follows the official formats documented by [Claude Code PermissionRequest hooks](https://code.claude.com/docs/en/hooks#permissionrequest) and [Codex hooks](https://learn.chatgpt.com/docs/hooks#permissionrequest).
 
 ### Live usage limits
 
@@ -235,7 +265,7 @@ python3 apps/agent_bridge.py request \
 
 ### Input boundary
 
-`interaction.mode: emulator_sse` listens to the emulator's `/events` stream and is intentionally disabled by default. The documented BUSY Bar HTTP API can inject a key with `POST /api/input`, but it does not currently expose a host-readable stream for physical button presses. Display output and quota bars work unchanged on hardware. Physical `OK` and `BACK` approvals require an official or firmware-side outbound input transport before this adapter can be enabled against the real device. The hook always falls back safely while that transport is absent.
+`interaction.mode: emulator_sse` is development telemetry only. Its input is always untrusted and cannot mutate an event. Production uses `signed_http`, bound to loopback, with at least a 32-byte secret from `FOUNDEROS_INPUT_SECRET`. Generate one with `python3 apps/founderos_input.py --generate-secret`. The reference client first reads the exact context and then signs a fresh request: `python3 apps/founderos_input.py ok` or `python3 apps/founderos_input.py back`. A physical button transport must implement that same contract. The hook falls back safely while no trusted transport exists.
 
 ## Optional OpenAI fallback
 

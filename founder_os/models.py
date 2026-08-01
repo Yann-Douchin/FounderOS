@@ -4,9 +4,10 @@ from __future__ import annotations
 
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timezone
 from hashlib import sha256
 from typing import Any, Mapping
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 
 UTC = timezone.utc
@@ -21,8 +22,11 @@ def parse_datetime(value: Any, *, default: datetime | None = None) -> datetime |
         return default
     if isinstance(value, datetime):
         dt = value
-    elif isinstance(value, (int, float)):
-        dt = datetime.fromtimestamp(float(value), tz=UTC)
+    elif isinstance(value, (int, float)) and not isinstance(value, bool):
+        try:
+            dt = datetime.fromtimestamp(float(value), tz=UTC)
+        except (OverflowError, OSError, ValueError) as exc:
+            raise ValueError(f"invalid datetime: {value!r}") from exc
     elif isinstance(value, str):
         text = value.strip()
         if not text:
@@ -40,12 +44,55 @@ def parse_datetime(value: Any, *, default: datetime | None = None) -> datetime |
     return dt.astimezone(UTC)
 
 
+def parse_local_date(
+    value: Any,
+    timezone_name: str,
+    *,
+    end_of_day: bool = False,
+) -> datetime | None:
+    """Parse a date-only API value at a named local-day boundary."""
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        return parse_datetime(value)
+    if isinstance(value, date):
+        local_date = value
+    elif isinstance(value, str):
+        text_value = value.strip()
+        if "T" in text_value or " " in text_value:
+            return parse_datetime(text_value)
+        try:
+            local_date = date.fromisoformat(text_value)
+        except ValueError as exc:
+            raise ValueError(f"invalid local date: {value!r}") from exc
+    else:
+        raise ValueError(f"invalid local date type: {type(value).__name__}")
+    try:
+        local_timezone = ZoneInfo(timezone_name)
+    except ZoneInfoNotFoundError as exc:
+        raise ValueError(f"unknown timezone: {timezone_name}") from exc
+    boundary = time(23, 59, 59, 999999) if end_of_day else time.min
+    return datetime.combine(local_date, boundary, tzinfo=local_timezone).astimezone(UTC)
+
+
 def _stable_event_id(source: str, dedupe_key: str, title: str) -> str:
     raw = "\x1f".join((source, dedupe_key, title)).encode("utf-8")
     return f"{source}:{sha256(raw).hexdigest()[:16]}"
 
 
-@dataclass(frozen=True, slots=True)
+def _normalized_text(value: Any, *, field_name: str, limit: int, required: bool = False) -> str:
+    if not isinstance(value, str):
+        raise ValueError(f"event {field_name} must be text")
+    normalized = unicodedata.normalize("NFC", value)
+    text = " ".join(normalized.split())
+    if required and not text:
+        raise ValueError(f"event {field_name} is required")
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text
+
+
+@dataclass(frozen=True)
 class Event:
     """One normalized fact that may deserve the founder's attention."""
 
@@ -67,12 +114,17 @@ class Event:
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        source = self.source.strip().lower()
-        title = " ".join(unicodedata.normalize("NFC", self.title).split())
-        if not source:
-            raise ValueError("event source is required")
-        if not title:
-            raise ValueError("event title is required")
+        source = _normalized_text(self.source, field_name="source", limit=64, required=True).lower()
+        title = _normalized_text(self.title, field_name="title", limit=512, required=True)
+        body = _normalized_text(self.body, field_name="body", limit=4096)
+        kind = _normalized_text(self.kind, field_name="kind", limit=64, required=True).lower()
+        urgency = _normalized_text(self.urgency, field_name="urgency", limit=32, required=True).lower()
+        impact = _normalized_text(self.impact, field_name="impact", limit=32, required=True).lower()
+        url = _normalized_text(self.url, field_name="url", limit=2048)
+        if not isinstance(self.action_required, bool):
+            raise ValueError("event action_required must be a boolean")
+        if not isinstance(self.metadata, Mapping):
+            raise ValueError("event metadata must be an object")
         if not 0 <= int(self.priority) <= 100:
             raise ValueError("event priority must be between 0 and 100")
         if not 0.0 <= float(self.confidence) <= 1.0:
@@ -80,10 +132,17 @@ class Event:
         occurred_at = parse_datetime(self.occurred_at, default=utc_now())
         due_at = parse_datetime(self.due_at)
         expires_at = parse_datetime(self.expires_at)
-        dedupe_key = self.dedupe_key.strip() or self.id.strip() or title.casefold()
-        event_id = self.id.strip() or _stable_event_id(source, dedupe_key, title)
+        raw_id = _normalized_text(self.id, field_name="id", limit=256)
+        dedupe_key = _normalized_text(self.dedupe_key, field_name="dedupe_key", limit=256)
+        dedupe_key = dedupe_key or raw_id or title.casefold()
+        event_id = raw_id or _stable_event_id(source, dedupe_key, title)
         object.__setattr__(self, "source", source)
         object.__setattr__(self, "title", title)
+        object.__setattr__(self, "body", body)
+        object.__setattr__(self, "kind", kind)
+        object.__setattr__(self, "urgency", urgency)
+        object.__setattr__(self, "impact", impact)
+        object.__setattr__(self, "url", url)
         object.__setattr__(self, "priority", int(self.priority))
         object.__setattr__(self, "confidence", float(self.confidence))
         object.__setattr__(self, "occurred_at", occurred_at)
@@ -136,7 +195,7 @@ class Event:
         }
 
 
-@dataclass(frozen=True, slots=True)
+@dataclass(frozen=True)
 class RankedEvent:
     event: Event
     score: float

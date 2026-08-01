@@ -26,11 +26,11 @@ Capture each stable state with the emulator's PNG button:
 6. agent permission request, pulsing timeout with red `NON` and green `OUI`
 7. ChatGPT/Codex usage, one or two live quota bars
 
-The emulator exports a 720×160 `preview.png`, exactly 10 display pixels per LED.
+The emulator exports a 720×160 `preview.png`, exactly 10 display pixels per LED. For a reproducible headless capture of the current SSE frame, run `python3 tools/capture_emulator.py --output preview.png`.
 
 ## V1 capture set
 
-![Five FounderOS display states](captures/founderos-gallery.png)
+![FounderOS preserving French accents](captures/gmail.png)
 
 - [Linear blocker, 720×160](captures/linear-blocker.png)
 - [Calendar, 720×160](captures/calendar.png)
