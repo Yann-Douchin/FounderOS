@@ -1,0 +1,109 @@
+{
+  "display": {
+    "host": "127.0.0.1:8080",
+    "application_name": "founderos",
+    "device_priority": 90,
+    "min_hold_seconds": 6,
+    "content_icon": {
+      "enabled": true,
+      "frame_seconds": 1.0
+    }
+  },
+  "interaction": {
+    "enabled": false,
+    "mode": "emulator_sse",
+    "allow_key": "ok",
+    "deny_key": "back"
+  },
+  "llm": {
+    "enabled": false,
+    "provider": "openai",
+    "model": "gpt-5.6-sol",
+    "api_key_env": "OPENAI_API_KEY",
+    "max_calls_per_hour": 6
+  },
+  "connectors": {
+    "demo": {
+      "enabled": true,
+      "scenario": "mixed",
+      "poll_interval_seconds": 2
+    },
+    "linear": {
+      "enabled": false,
+      "mode": "api",
+      "token_env": "LINEAR_API_KEY",
+      "team_keys": [],
+      "poll_interval_seconds": 30
+    },
+    "slack": {
+      "enabled": false,
+      "mode": "api",
+      "token_env": "SLACK_BOT_TOKEN",
+      "channel_ids": [],
+      "channel_names": {},
+      "mention_markers": [],
+      "poll_interval_seconds": 60
+    },
+    "gmail": {
+      "enabled": false,
+      "mode": "api",
+      "access_token_env": "GOOGLE_ACCESS_TOKEN",
+      "query": "is:unread newer_than:2d",
+      "vip_senders": [],
+      "poll_interval_seconds": 60
+    },
+    "calendar": {
+      "enabled": false,
+      "mode": "api",
+      "access_token_env": "GOOGLE_ACCESS_TOKEN",
+      "calendar_id": "primary",
+      "horizon_hours": 8,
+      "poll_interval_seconds": 60
+    },
+    "linkedin": {
+      "enabled": false,
+      "feed_url": "",
+      "token_env": "LINKEDIN_FEED_TOKEN",
+      "poll_interval_seconds": 120
+    },
+    "claude": {
+      "enabled": false,
+      "mode": "agent_bridge",
+      "state_dir": ".data/agents",
+      "usage": {
+        "mode": "snapshot",
+        "ttl_seconds": 900
+      },
+      "poll_interval_seconds": 2
+    },
+    "chatgpt_codex": {
+      "enabled": false,
+      "mode": "agent_bridge",
+      "state_dir": ".data/agents",
+      "usage": {
+        "mode": "codex_app_server",
+        "codex_binary": "",
+        "timeout_seconds": 5,
+        "ttl_seconds": 120,
+        "refresh_seconds": 60
+      },
+      "poll_interval_seconds": 2
+    },
+    "github": {
+      "enabled": false,
+      "status": "planned"
+    },
+    "stripe": {
+      "enabled": false,
+      "status": "planned"
+    },
+    "shopify": {
+      "enabled": false,
+      "status": "planned"
+    },
+    "home_assistant": {
+      "enabled": false,
+      "status": "planned"
+    }
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "description": "Route explicit Codex permission requests through FounderOS.",
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "/usr/bin/python3 \"$(git rev-parse --show-toplevel)/apps/agent_permission_hook.py\" --provider chatgpt_codex --state-dir \"$(git rev-parse --show-toplevel)/.data/agents\" --timeout 45",
+            "timeout": 50,
+            "statusMessage": "Waiting for BUSY Bar approval"
+          }
+        ]
+      }
+    ]
+  }
+}

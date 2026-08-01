@@ -1,0 +1,13 @@
+{
+  "name": "founder-os-busybar",
+  "version": "0.1.0",
+  "description": "FounderOS deterministic decision engine plus a faithful local BUSY Bar emulator",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "build": "npm --prefix web run build",
+    "test": "python3 -m unittest discover -s tests -v",
+    "founderos:demo": "python3 apps/founderos.py --demo"
+  },
+  "license": "MIT"
+}
