@@ -78,7 +78,7 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 | Local CI equivalent | Passed | Python suite, production invariants, frontend build, and demo |
 | Emulator API 25 and rendering | Passed | Seven synthetic captures, accented glyph inspection, structural clear, and live HTTP 409 ownership test |
 | Signed interaction | Passed locally | Exact-context allow, consumed-context rejection, and untrusted SSE refusal |
-| Dedicated GitHub repository and branch protection | Pending external | Repository owner must create or select the remote and enable required checks |
+| Dedicated GitHub repository and branch protection | Passed | Public repository [Yann-Douchin/FounderOS](https://github.com/Yann-Douchin/FounderOS); protected `main` requires `web`, `python (3.11)`, and `python (3.13)` with strict, linear, pull-request-only changes |
 | Live Linear, Calendar, Slack, and Gmail credentials | Pending external | Deployment owner must provision least-privilege secrets and capture healthy poll evidence |
 | Physical BUSY Bar acceptance | Pending hardware | Device owner must run token, transition, animation, and button-adapter cases |
 | Codex project hook approval | Pending operator UI | Open `/hooks` in Codex and approve the reviewed local definition once |
