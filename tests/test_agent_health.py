@@ -28,7 +28,7 @@ class AgentHealthTests(unittest.TestCase):
             events = connector.poll(NOW)
             self.assertEqual(len(events), 1)
             self.assertEqual(events[0].kind, "connector_health")
-            self.assertIn("indisponible", events[0].title)
+            self.assertIn("unavailable", events[0].title)
             self.assertEqual(events[0].metadata["component"], "usage")
 
     def test_usage_dedupe_is_provider_specific(self) -> None:

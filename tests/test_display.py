@@ -146,7 +146,7 @@ class DisplayTests(unittest.TestCase):
     def test_agent_usage_renders_two_quota_bars(self) -> None:
         event = Event(
             source="chatgpt_codex",
-            title="Utilisation ChatGPT / Codex",
+            title="ChatGPT / Codex usage",
             kind="agent_usage",
             metadata={
                 "windows": [

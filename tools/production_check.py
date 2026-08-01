@@ -29,11 +29,13 @@ def main() -> int:
         check_required_files,
         check_json_documents,
         check_production_config,
+        check_autonomous_service,
         check_private_state,
         check_hook_state_paths,
         check_hook_runtime,
         check_font_atlas,
         check_gallery_captures,
+        check_english_interface,
         check_character_integrity,
         check_git_exclusions,
     ]
@@ -54,6 +56,11 @@ def check_required_files() -> None:
         "SECURITY.md",
         "docs/founderos/PRODUCTION-CLOSURE.md",
         "founderos.production.example.json",
+        "founderos.macos.example.json",
+        "apps/founderosctl.py",
+        "deploy/slack-app-manifest.yaml",
+        "founder_os/secrets.py",
+        "founder_os/service.py",
         "founder_os/interaction.py",
         "founder_os/core/scheduler.py",
         "tools/capture_emulator.py",
@@ -64,7 +71,12 @@ def check_required_files() -> None:
 
 
 def check_json_documents() -> None:
-    for name in ("founderos.example.json", "founderos.production.example.json", ".codex/hooks.json"):
+    for name in (
+        "founderos.example.json",
+        "founderos.production.example.json",
+        "founderos.macos.example.json",
+        ".codex/hooks.json",
+    ):
         try:
             payload = json.loads((ROOT / name).read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
@@ -97,6 +109,26 @@ def check_production_config() -> None:
     linear = config["connectors"]["linear"]
     if linear.get("scope") != "portfolio" or not linear.get("team_keys"):
         raise CheckFailure("production Linear must use an allowlisted portfolio scope")
+
+
+def check_autonomous_service() -> None:
+    controller = (ROOT / "apps" / "founderosctl.py").read_text(encoding="utf-8")
+    if "--skip-preflight" in controller:
+        raise CheckFailure("autonomous service installation can bypass the live connector preflight")
+    server = (ROOT / "server.js").read_text(encoding="utf-8")
+    if 'process.env.BUSY_HOST || "127.0.0.1"' not in server or "server.listen(PORT, HOST" not in server:
+        raise CheckFailure("the emulator is not loopback-only by default")
+    if "BUSY_DATA_DIR must be absolute" not in server or "configured || defaultDataDir()" not in server:
+        raise CheckFailure("the emulator state does not default outside the checkout")
+    service = (ROOT / "founder_os" / "service.py").read_text(encoding="utf-8")
+    if '"BUSY_HOST": "127.0.0.1"' not in service or '"BUSY_DATA_DIR": str(state / "emulator")' not in service:
+        raise CheckFailure("the supervised emulator lacks loopback or private-state isolation")
+    if (
+        'health_state = "process_mismatch"' not in service
+        or "_wait_for_runtime(config" not in controller
+        or "_wait_for_emulator(config" not in controller
+    ):
+        raise CheckFailure("service installation does not verify its supervised processes")
 
 
 def check_private_state() -> None:
@@ -166,6 +198,38 @@ def check_gallery_captures() -> None:
             raise CheckFailure(f"gallery capture has wrong dimensions: {name} is {width}x{height}")
 
 
+def check_english_interface() -> None:
+    paths = (
+        "apps/agent_permission_hook.py",
+        "founder_os/agents/bridge.py",
+        "founder_os/connectors/agents.py",
+        "founder_os/connectors/calendar.py",
+        "founder_os/connectors/demo.py",
+        "founder_os/connectors/gmail.py",
+        "founder_os/connectors/linear.py",
+        "founder_os/core/scheduler.py",
+    )
+    text = "\n".join((ROOT / name).read_text(encoding="utf-8") for name in paths)
+    forbidden = (
+        "Autorisation requise",
+        "Utilisation ",
+        "indisponible",
+        "Connexion ",
+        "Données ",
+        "Sans objet",
+        "Expéditeur inconnu",
+        "Rendez-vous",
+        "PRÉPA ",
+        "Non assigné",
+        "secret masqué",
+        "Refusé depuis",
+        "décision à valider",
+    )
+    found = [phrase for phrase in forbidden if phrase in text]
+    if found:
+        raise CheckFailure(f"French interface fallback text remains: {found}")
+
+
 def check_character_integrity() -> None:
     suffixes = {".py", ".md", ".json", ".yml", ".yaml", ".js", ".vue"}
     ignored_parts = {"node_modules", ".git", "dist", "public"}
@@ -184,7 +248,11 @@ def check_character_integrity() -> None:
 
 def check_git_exclusions() -> None:
     ignore = (ROOT / ".gitignore").read_text(encoding="utf-8")
-    if ".data/" not in ignore or "founderos.local.json" not in ignore:
+    if (
+        ".data/" not in ignore
+        or "founderos.local.json" not in ignore
+        or "founderos.*.local.json" not in ignore
+    ):
         raise CheckFailure("private local data exclusions are incomplete")
     process = subprocess.run(
         ["git", "ls-files", ".data"],

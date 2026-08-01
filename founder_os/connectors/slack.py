@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import urllib.parse
 from datetime import datetime, timedelta, timezone
@@ -28,7 +29,7 @@ class SlackConnector(Connector):
 
     def __init__(self, config: Mapping[str, Any]) -> None:
         super().__init__(config)
-        self.token = configured_secret(config, "token_env")
+        self.token = configured_secret(config, "token_env", self.secrets)
         self.channel_ids = [str(value) for value in config.get("channel_ids", [])]
         if not self.channel_ids:
             raise ConnectorConfigurationError("slack.channel_ids must contain at least one conversation id")
@@ -72,8 +73,11 @@ class SlackConnector(Connector):
                     retries=0,
                 )
                 if not payload.get("ok"):
+                    error_code = str(payload.get("error") or "")
+                    if not re.fullmatch(r"[a-z0-9_-]{1,64}", error_code):
+                        error_code = "unknown_error"
                     raise ConnectorError(
-                        f"Slack conversations.history failed: {payload.get('error', 'unknown_error')}"
+                        f"Slack conversations.history failed: {error_code}"
                     )
                 messages = payload.get("messages") or []
                 if not isinstance(messages, list) or not all(isinstance(message, Mapping) for message in messages):

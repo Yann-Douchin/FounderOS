@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 import signal
 import time
 from dataclasses import dataclass
@@ -20,11 +19,13 @@ from founder_os.core.priority_engine import PriorityEngine
 from founder_os.core.scheduler import Scheduler
 from founder_os.display.busybar import BusyBarDisplay, Display, DisplayConflict, DisplayError
 from founder_os.display.layouts import event_layout, idle_layout
+from founder_os.health import HealthReporter
 from founder_os.interaction import EmulatorInputListener, InputEvent, SignedInputListener
 from founder_os.models import RankedEvent, utc_now
 from founder_os.ranking.deterministic import DeterministicRanker
 from founder_os.ranking.llm import NoLLMFallback, OpenAIResponsesTieBreaker, TieBreaker
 from founder_os.ranking.memory import RankingMemory
+from founder_os.secrets import build_secret_resolver
 
 
 @dataclass(slots=True)
@@ -48,7 +49,9 @@ class FounderOSRuntime:
         self.config = config
         self.log = logger or logging.getLogger("founderos")
         self._state_lock = RLock()
+        self.secrets = build_secret_resolver(config.get("secrets"))
         runtime_config = config["runtime"]
+        operations_config = config["operations"]
         display_config = config["display"]
         ranking_config = config["ranking"]
         self.bus = EventBus(default_ttl_minutes=float(runtime_config["event_ttl_minutes"]))
@@ -57,7 +60,7 @@ class FounderOSRuntime:
             retention_days=float(config["memory"]["retention_days"]),
             max_entries=int(config["memory"]["max_entries"]),
         )
-        self.connectors = build_connectors(config["connectors"])
+        self.connectors = build_connectors(config["connectors"], secrets=self.secrets)
         self.scheduler = Scheduler(
             self.connectors,
             self.bus,
@@ -72,7 +75,7 @@ class FounderOSRuntime:
         )
         if display is None:
             api_token_env = str(display_config.get("api_token_env", "")).strip()
-            api_token = os.environ.get(api_token_env, "").strip() if api_token_env else ""
+            api_token = self.secrets.get(api_token_env) if api_token_env else ""
             display = BusyBarDisplay(
                 str(display_config["host"]),
                 application_name=str(display_config["application_name"]),
@@ -119,7 +122,7 @@ class FounderOSRuntime:
                 )
             else:
                 secret_env = str(interaction_config["secret_env"]).strip()
-                secret = os.environ.get(secret_env, "").strip()
+                secret = self.secrets.get(secret_env)
                 if not secret:
                     raise ValueError(f"signed input is enabled but {secret_env} is missing")
                 self.input_listener = SignedInputListener(
@@ -139,6 +142,14 @@ class FounderOSRuntime:
         self._last_frame_signature: tuple[tuple[str, str], ...] | None = None
         self._displayed_event_id: str | None = None
         self._stop = False
+        self.health_reporter = (
+            HealthReporter(
+                str(operations_config["health_path"]),
+                heartbeat_seconds=float(operations_config["heartbeat_seconds"]),
+            )
+            if bool(operations_config["health_enabled"])
+            else None
+        )
 
     @classmethod
     def from_path(
@@ -158,7 +169,7 @@ class FounderOSRuntime:
             candidate = self.rank_engine.select(self.bus.active(now), now)
             candidate = self._respect_hold(candidate, now)
             displayed, error = self._render(candidate, now)
-        return RuntimeState(
+        state = RuntimeState(
             selected=candidate,
             event_count=len(self.bus.active(now)),
             connector_counts=connector_counts,
@@ -166,6 +177,17 @@ class FounderOSRuntime:
             displayed=displayed,
             display_error=error,
         )
+        if self.health_reporter:
+            self.health_reporter.publish(
+                selected_source=candidate.event.source if candidate else "",
+                event_count=state.event_count,
+                connector_health=state.connector_health,
+                displayed=state.displayed,
+                display_error=state.display_error,
+                now=now,
+                force=force_poll,
+            )
+        return state
 
     def run(self) -> None:
         self._install_signal_handlers()
@@ -198,6 +220,8 @@ class FounderOSRuntime:
         if self.input_listener:
             self.input_listener.close()
         self.scheduler.close()
+        if self.health_reporter:
+            self.health_reporter.close()
 
     def handle_input(self, value: str | InputEvent) -> str | None:
         input_event = value if isinstance(value, InputEvent) else InputEvent(key=str(value))
@@ -346,7 +370,7 @@ class FounderOSRuntime:
         if config.get("provider") != "openai":
             self.log.warning("unsupported LLM provider %s, fallback disabled", config.get("provider"))
             return NoLLMFallback()
-        key = os.environ.get(str(config.get("api_key_env", "OPENAI_API_KEY")), "").strip()
+        key = self.secrets.get(str(config.get("api_key_env", "OPENAI_API_KEY")))
         if not key:
             self.log.warning("LLM fallback requested but API key is missing, fallback disabled")
             return NoLLMFallback()

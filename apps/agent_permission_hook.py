@@ -63,7 +63,7 @@ def main() -> int:
                 "hookEventName": "PermissionRequest",
                 "decision": {
                     "behavior": "deny",
-                    "message": "Refusé depuis le BUSY Bar.",
+                    "message": "Denied from the BUSY Bar.",
                 },
             }
         }

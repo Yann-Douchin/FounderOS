@@ -44,6 +44,23 @@ class GoogleOAuthTests(unittest.TestCase):
         with patch.dict(os.environ, {}, clear=True), self.assertRaises(ConnectorConfigurationError):
             GoogleAccessTokenProvider({"access_token_env": "MISSING_ACCESS_TOKEN"})
 
+    def test_public_client_refresh_does_not_require_a_client_secret(self) -> None:
+        environment = {
+            "TEST_GOOGLE_REFRESH": "refresh-value",
+            "TEST_GOOGLE_CLIENT": "client-value",
+        }
+        with patch.dict(os.environ, environment, clear=True), patch(
+            "founder_os.connectors.google_oauth.request_json",
+            return_value={"access_token": "access-value", "expires_in": 3600},
+        ) as request:
+            provider = GoogleAccessTokenProvider({
+                "refresh_token_env": "TEST_GOOGLE_REFRESH",
+                "client_id_env": "TEST_GOOGLE_CLIENT",
+                "client_secret_env": "TEST_GOOGLE_SECRET",
+            })
+            self.assertEqual(provider.token(NOW), "access-value")
+        self.assertNotIn("client_secret", request.call_args.kwargs["form"])
+
 
 if __name__ == "__main__":
     unittest.main()

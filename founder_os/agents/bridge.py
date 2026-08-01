@@ -58,7 +58,7 @@ def summarize_permission(payload: Mapping[str, Any]) -> tuple[str, str]:
     if not summary:
         summary = f"Autoriser {tool_name} ?"
     for pattern in _SECRET_PATTERNS:
-        summary = pattern.sub("[secret masqué]", summary)
+        summary = pattern.sub("[secret redacted]", summary)
     return tool_name, summary
 
 

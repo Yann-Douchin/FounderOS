@@ -28,7 +28,7 @@ class JsonFeedConnector(Connector):
         if not self.feed_url:
             raise ConnectorConfigurationError(f"{source}.feed_url is required")
         token_env = str(config.get("token_env", "")).strip()
-        self.token = configured_secret(config, "token_env") if token_env else ""
+        self.token = configured_secret(config, "token_env", self.secrets) if token_env else ""
         self.request_timeout = max(1.0, float(config.get("request_timeout_seconds", 6)))
         self.max_response_bytes = max(1024, int(config.get("max_response_bytes", 2 * 1024 * 1024)))
 

@@ -84,7 +84,8 @@ FounderOS includes:
 - live Codex quota bars through the official local app-server interface;
 - request-bound Claude and Codex permission decisions with a 45-second fail-safe timeout;
 - layouts constrained and tested against the exact BUSY Bar HTTP draw contract;
-- concurrent source health, direct API connectors, in-memory Google OAuth refresh, and a governed snapshot bridge for authorized connector data.
+- concurrent source health, direct API connectors, durable Linear and Google OAuth refresh, and a governed snapshot bridge for authorized connector data;
+- native macOS Keychain storage plus supervised FounderOS and loopback-only emulator LaunchAgents.
 
 ```bash
 # Inspect the decision and frame without touching the display
@@ -95,6 +96,31 @@ npm test
 ```
 
 See [FounderOS architecture](docs/founderos/ARCHITECTURE.md), [configuration](docs/founderos/CONFIGURATION.md), and the [gallery capture checklist](docs/founderos/GALLERY.md).
+
+### Autonomous macOS service
+
+The tracked `founderos.macos.example.json` contains no credentials. Copy it to an ignored local file, replace the workspace and channel placeholders, authorize the read-only providers, then install the supervised service:
+
+```bash
+cp founderos.macos.example.json founderos.autonomous.local.json
+
+# OAuth setup. Google requires a downloaded Desktop app client JSON.
+python3 apps/founderosctl.py --config founderos.autonomous.local.json auth linear --client-id YOUR_LINEAR_CLIENT_ID
+python3 apps/founderosctl.py --config founderos.autonomous.local.json auth google --client-json ~/Downloads/client_secret.json
+
+# Copy the Slack bot token, then import it without placing it in shell history.
+python3 apps/founderosctl.py --config founderos.autonomous.local.json secret import-clipboard SLACK_BOT_TOKEN
+
+# This preflight must report every enabled connector as healthy.
+python3 apps/founderos.py --config founderos.autonomous.local.json --once --dry-run --require-healthy
+
+# Build the emulator UI and supervise both processes in the signed-in macOS session.
+npm run build
+python3 apps/founderosctl.py --config founderos.autonomous.local.json service install
+python3 apps/founderosctl.py --config founderos.autonomous.local.json service status
+```
+
+Secrets stay in the macOS Keychain. They are never written to the plist, configuration, process arguments, heartbeat, or logs. The emulator listens on `127.0.0.1` by default and keeps its private state outside the checkout. Installation succeeds only after the new FounderOS process publishes a heartbeat with the same PID reported by launchd, a healthy display, and healthy connectors. Use `service install --skip-emulator` when the configured display is physical hardware. Full provisioning and recovery details are in [configuration](docs/founderos/CONFIGURATION.md#autonomous-macos-deployment).
 
 The project-local Claude and Codex hooks are already tracked. Enable both agent connectors in your local configuration, then run FounderOS:
 

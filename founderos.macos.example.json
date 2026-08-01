@@ -1,0 +1,93 @@
+{
+  "secrets": {
+    "provider": "macos_keychain",
+    "service": "com.founderos.runtime",
+    "accounts": [
+      "LINEAR_CLIENT_ID",
+      "LINEAR_REFRESH_TOKEN",
+      "SLACK_BOT_TOKEN",
+      "GOOGLE_CLIENT_ID",
+      "GOOGLE_CLIENT_SECRET",
+      "GOOGLE_REFRESH_TOKEN"
+    ]
+  },
+  "runtime": {
+    "environment": "production",
+    "timezone": "Europe/Madrid",
+    "connector_workers": 6
+  },
+  "operations": {
+    "health_enabled": true,
+    "heartbeat_seconds": 15
+  },
+  "display": {
+    "host": "127.0.0.1:8080",
+    "application_name": "founderos",
+    "device_priority": 90,
+    "api_semver": "25.0.0",
+    "validate_on_start": true
+  },
+  "interaction": {
+    "enabled": false
+  },
+  "llm": {
+    "enabled": false
+  },
+  "connectors": {
+    "demo": {
+      "enabled": false
+    },
+    "linear": {
+      "enabled": true,
+      "mode": "api",
+      "auth_scheme": "bearer",
+      "oauth_refresh": true,
+      "refresh_token_env": "LINEAR_REFRESH_TOKEN",
+      "client_id_env": "LINEAR_CLIENT_ID",
+      "scope": "portfolio",
+      "team_keys": ["BUSY"],
+      "portfolio_priority_ceiling": 2,
+      "portfolio_due_horizon_days": 14,
+      "rollup_projects": true,
+      "critical": true,
+      "poll_interval_seconds": 30
+    },
+    "calendar": {
+      "enabled": true,
+      "mode": "api",
+      "refresh_token_env": "GOOGLE_REFRESH_TOKEN",
+      "client_id_env": "GOOGLE_CLIENT_ID",
+      "client_secret_env": "GOOGLE_CLIENT_SECRET",
+      "calendar_id": "primary",
+      "timezone": "Europe/Madrid",
+      "critical": true,
+      "poll_interval_seconds": 60
+    },
+    "slack": {
+      "enabled": true,
+      "mode": "api",
+      "token_env": "SLACK_BOT_TOKEN",
+      "channel_ids": ["C0123456789"],
+      "channel_names": {"C0123456789": "launch"},
+      "mention_markers": ["<@U012FOUNDER>"],
+      "critical": true,
+      "poll_interval_seconds": 60
+    },
+    "gmail": {
+      "enabled": true,
+      "mode": "api",
+      "refresh_token_env": "GOOGLE_REFRESH_TOKEN",
+      "client_id_env": "GOOGLE_CLIENT_ID",
+      "client_secret_env": "GOOGLE_CLIENT_SECRET",
+      "query": "is:unread newer_than:2d",
+      "critical": true,
+      "poll_interval_seconds": 60
+    },
+    "claude": {
+      "enabled": false
+    },
+    "chatgpt_codex": {
+      "enabled": false
+    }
+  }
+}

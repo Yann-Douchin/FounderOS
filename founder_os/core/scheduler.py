@@ -193,18 +193,18 @@ class Scheduler:
     def _health_event(self, schedule: ConnectorSchedule, now: datetime, *, status: str) -> Event:
         label = _source_label(schedule.connector.name)
         titles = {
-            "starting": f"Connexion {label} en cours",
-            "stale": f"Données {label} périmées",
-            "unavailable": f"Source {label} indisponible",
-            "timeout": f"Source {label} trop lente",
-            "degraded": f"Source {label} dégradée",
+            "starting": f"Connecting to {label}",
+            "stale": f"Stale {label} data",
+            "unavailable": f"{label} unavailable",
+            "timeout": f"{label} timed out",
+            "degraded": f"{label} degraded",
         }
         is_failure = status != "starting"
         return Event(
             id=self._health_event_id(schedule.connector.name),
             dedupe_key=f"connector-health:{schedule.connector.name}",
             source="founderos",
-            title=titles.get(status, f"Source {label} inconnue"),
+            title=titles.get(status, f"Unknown {label} status"),
             body=schedule.last_error,
             priority=(94 if schedule.connector.critical else 78) if is_failure else 38,
             action_required=is_failure,
