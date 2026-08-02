@@ -41,12 +41,16 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-RANK-002 | Display hold delayed permissions | Permission requests bypass the hold | `test_runtime` | Ranking | Closed |
 | FOS-DISP-001 | Hardware merge left stale elements | Clear the application before structural transitions | `test_runtime` | Display | Closed |
 | FOS-DISP-002 | Display calls omitted auth and version | Send the token when configured and API version `25.0.0` | `test_display` | Display | Closed |
+| FOS-DISP-003 | Animated icons resent the entire frame every second and restarted scrolling text | Stable element IDs and same-application merge now send only changed icon pixels. Refresh probes exclude scrolling elements, while bounded leases still remove abandoned frames | `test_runtime`, `test_emulator_contract` | Display | Closed |
+| FOS-DISP-004 | Firmware timer, hidden physical-session, menu, and smart-home blockers caused unbounded retry noise or false visibility | Emulator scenarios reproduce all four 409 conditions. Runtime applies bounded exponential retry, revokes input visibility, and forces a complete recovery draw | `test_runtime_visibility`, `test_emulator_contract` | Display | Closed |
+| FOS-DISP-005 | Emulator behavior could not be compared with the actual raw framebuffer | `/api/screen` emits the observed BGR888 front and gray8 back buffers, while the client validates exact sizes and converts front data to RGB | `test_display`, `test_emulator_contract` | Display | Closed |
 | FOS-TIME-001 | Linear dates expired around UTC midnight | Resolve date-only deadlines at local end of day | `test_connectors` | Data model | Closed |
 | FOS-TIME-002 | All-day Calendar events disappeared | Normalize date-only events with exclusive local end dates | `test_connectors` | Data model | Closed |
 | FOS-UX-001 | Normal events had no actions | Trusted input can acknowledge, snooze, and queue open actions | `test_runtime` | Product | Closed |
 | FOS-I18N-001 | Accents were stripped or rendered as replacement glyphs | Normalize all event text to NFC, preserve labels, use the global scrolling font for non-ASCII titles, and verify the complete French glyph set | `test_models`, `test_display`, `production_check.py` | Display | Closed |
 | FOS-I18N-002 | Uppercase accents existed in the atlas but were clipped above its visible line | Fold only top overshoot pixels into the first scanline while preserving the baseline, then reject every negative French glyph offset | `test_display`, `test_capture`, `production_check.py` | Display | Closed |
 | FOS-I18N-003 | FounderOS mixed French system labels into an English interface | System fallbacks, health incidents, permission controls, readiness labels, and demo copy are English, while multilingual content recognition and Unicode rendering remain intact | `production_check.py`, connector tests | Product | Closed |
+| FOS-I18N-004 | Atlas tests could pass while a physical device still rendered French glyphs incorrectly | `founderosctl display verify-accents` compares native screen readback pixel by pixel. A double-buffered PNG mode preserves Unicode when a firmware fails the native check | `test_display`, physical release gate | Display | Closed |
 | FOS-CONFIG-001 | The CLI silently replaced a configured display host with port 8080 | `--host` is now an explicit override only. Omitting it preserves the configuration file | `test_cli` | Runtime | Closed |
 | FOS-OPS-001 | No delivery gate existed | CI tests Python, builds the frontend, checks invariants, and runs the demo | `.github/workflows/ci.yml` | Maintainers | Closed |
 | FOS-OPS-002 | Gallery claims referenced missing files | A dependency-free SSE exporter produces seven synthetic 720×160 captures, and production checks verify their signatures and dimensions | `test_capture`, `production_check.py` | Maintainers | Closed |
@@ -54,6 +58,7 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-OPS-004 | Polling stopped when the terminal closed or the Mac restarted | Private user LaunchAgents supervise the loopback emulator and FounderOS, restart unsuccessful exits, and expose a content-free mode `0600` heartbeat whose PID must match launchd before installation succeeds | `test_autonomous_service`, `production_check.py` | Operations | Closed |
 | FOS-OPS-005 | The emulator silently listened on every network interface | The default server and its LaunchAgent bind explicitly to `127.0.0.1`; hardware deployment requires an explicit separate host and token policy | `test_autonomous_service`, `production_check.py` | Security | Closed |
 | FOS-OPS-006 | Launchd could stall while reading a checkout inside a macOS protected folder, and a failed service replacement could leave no working definition | A shell bootstrap archives committed runtime sources into a private content-addressed deployment outside the checkout. LaunchAgent replacement retries transient bootstrap failures, verifies readiness, and transactionally restores both prior definitions and loaded states on failure | `test_autonomous_service`, `production_check.py` | Operations | Closed |
+| FOS-OPS-007 | Community-tool observations were informal and could drift without review | BarPilot is pinned by commit and file hash. All 53 paths, all 69 HTTP operations, the status WebSocket, and the firmware quirks are executable through `tools/barpilot_compat.py` and protected by contract tests | `test_emulator_contract`, `barpilot-api25-contract.json` | Maintainers | Closed |
 
 ## Explicit capability boundary
 
@@ -76,7 +81,7 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 
 1. CI is green on the dedicated GitHub repository.
 2. Branch protection requires the Python and web jobs.
-3. A real BUSY Bar returns API major `25`, renders a structural transition without stale elements, and accepts its configured token.
+3. A real BUSY Bar returns API major `25`, renders a structural transition without stale elements, accepts its configured token, exposes valid front and back screen buffers, and passes either native or raster French-glyph readback.
 4. Linear, Calendar, Slack, and Gmail each complete a live poll with `healthy` status using least-privilege credentials.
 5. If device input is enabled, its adapter passes allow, deny, replay, stale-context, acknowledge, snooze, and open tests.
 6. No private snapshot, token, email body, Slack content, or permission payload appears in Git or CI logs.
@@ -85,13 +90,13 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 
 | Gate | Status | Evidence or remaining owner |
 | --- | --- | --- |
-| Local CI equivalent | Passed | Python suite, production invariants, frontend build, and demo |
-| Emulator API 25 and rendering | Passed | Seven synthetic captures, accented glyph inspection, structural clear, and live HTTP 409 ownership test |
+| Local CI equivalent | Passed | 145 Python and Node-backed tests, production invariants, frontend build, and deterministic demo |
+| Emulator API 25 and rendering | Passed | Pinned BarPilot source hash, WebSocket status, BGR and gray screen buffers, same-app merge, cross-app priority arbitration, all governed blockers, and native plus raster accent readback |
 | Signed interaction | Passed locally | Exact-context allow, consumed-context rejection, and untrusted SSE refusal |
 | Dedicated GitHub repository and branch protection | Passed | Public repository [Yann-Douchin/FounderOS](https://github.com/Yann-Douchin/FounderOS); protected `main` requires `web`, `python (3.11)`, and `python (3.13)` with strict, linear, pull-request-only changes |
 | Live Linear | Passed | Read-only OAuth refresh completed from the macOS Keychain; portfolio poll reported `healthy` with 9 current events |
 | Live Slack | Passed | Private app installed with `channels:history` and `groups:history` only; six allowlisted conversations passed read-only checks and the connector reported `healthy` |
 | Live Calendar and Gmail | Passed | Offline read-only Google OAuth credentials are stored in the macOS Keychain; Gmail reported `healthy` with 2 current events and Calendar reported `healthy` with no current event |
 | Autonomous polling supervisor | Passed | Both LaunchAgents are active from a private content-addressed deployment; the fresh heartbeat PID matches launchd, the emulator API reports `25.0.0`, the display is healthy, and all four live connectors report `healthy` |
-| Physical BUSY Bar acceptance | Pending hardware | Device owner must run token, transition, animation, and button-adapter cases |
+| Physical BUSY Bar acceptance | Pending hardware | Run the documented BarPilot mutation window and both `founderosctl display` checks, then complete token, transition, animation, and button-adapter cases |
 | Codex project hook approval | Pending operator UI | Open `/hooks` in Codex and approve the reviewed local definition once |

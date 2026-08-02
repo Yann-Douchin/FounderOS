@@ -104,10 +104,10 @@
           >{{ line.line }}</div>
           <div v-if="device.app.error" class="term-line err">✖ {{ device.app.error }}</div>
           <div v-if="device.app.running" class="term-line"><span class="caret"></span></div>
-          <div v-else-if="!device.app.error" class="term-line exit" :class="{ err: device.app.exitCode !== 0 }">— exited with code {{ device.app.exitCode }} —</div>
+          <div v-else-if="!device.app.error" class="term-line exit" :class="{ err: device.app.exitCode !== 0 }">exited with code {{ device.app.exitCode }}</div>
         </template>
         <template v-else>
-          <div class="term-line muted"># run an example app above — its output appears here</div>
+          <div class="term-line muted"># run an example app above, its output appears here</div>
           <div class="term-line cmd"><span class="prompt">$</span> <span class="caret"></span></div>
         </template>
       </div>
@@ -126,7 +126,7 @@ const search = ref('')
 const paramValues = ref({})
 
 // Filter by short name, full name (incl. local/ prefix), description, or the
-// "local" tag — case-insensitive, all whitespace-trimmed.
+// The "local" tag is case-insensitive and whitespace-trimmed.
 const filteredApps = computed(() => {
   const q = search.value.trim().toLowerCase()
   if (!q) return appList.value

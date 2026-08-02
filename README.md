@@ -17,7 +17,7 @@
   <img src="https://img.shields.io/badge/FounderOS-0.1.0-7C5CFC" alt="FounderOS" />
   <img src="https://img.shields.io/badge/API-25.0.0-2B7FFF" alt="API" />
   <img src="https://img.shields.io/badge/web%20UI-Vue%203-42b883" alt="Vue 3" />
-  <img src="https://img.shields.io/badge/server-zero--dependency%20Node-339933" alt="Server" />
+  <img src="https://img.shields.io/badge/server-Node%2020.9%2B%20%2B%20Sharp-339933" alt="Server" />
   <img src="https://img.shields.io/badge/code-MIT-yellow" alt="License" />
 </p>
 
@@ -37,14 +37,17 @@
 - **Connectors cannot seize the display.** Every source emits the same event contract and only the priority engine can select output.
 - **The hardware isn't here yet.** The BUSY Bar sells out fast, so this lets you build and test apps right now instead of waiting.
 - **BUSY Bar apps are just HTTP calls.** Apps target the device's REST API; the emulator implements that same API, so an app you build here runs unchanged on the real hardware. Just swap the host.
-- **What works here works there.** Fonts, animations, gamma, priority and conflict resolution all match the firmware, so there are no surprises when you move to a real bar.
+- **Hardware behavior is governed.** The API surface and observed firmware quirks are pinned as executable conformance tests. Physical-device acceptance remains an explicit release gate.
 
 ## Quick start
 
 ```bash
 git clone https://github.com/maxswinkels/busybar-emulator.git
-cd busybar-emulator/web && npm install && npm run build && cd ..
-node server.js
+cd busybar-emulator
+npm ci
+npm ci --prefix web
+npm run build
+npm start
 # → http://127.0.0.1:8080
 ```
 
@@ -80,7 +83,7 @@ FounderOS includes:
 - reserved, disabled-by-default entries for GitHub, Stripe, Shopify, and Home Assistant;
 - zero LLM calls in the normal loop;
 - an optional OpenAI Responses API fallback only for close ties;
-- deterministic, content-aware animated icons for alerts, meetings, messages, code, growth, decisions, tasks, and focus;
+- a governed six-state animated icon language for waiting, blocked, decision, meeting, validation, and success;
 - live Codex quota bars through the official local app-server interface;
 - request-bound Claude and Codex permission decisions with a 45-second fail-safe timeout;
 - layouts constrained and tested against the exact BUSY Bar HTTP draw contract;
@@ -114,7 +117,9 @@ python3 apps/founderosctl.py --config founderos.autonomous.local.json secret imp
 # This preflight must report every enabled connector as healthy.
 python3 apps/founderos.py --config founderos.autonomous.local.json --once --dry-run --require-healthy
 
-# Build the emulator UI and supervise both processes in the signed-in macOS session.
+# Install locked dependencies, build the emulator UI, and supervise both processes.
+npm ci
+npm ci --prefix web
 npm run build
 python3 apps/founderosctl.py --config founderos.autonomous.local.json service install
 python3 apps/founderosctl.py --config founderos.autonomous.local.json service status
@@ -131,6 +136,7 @@ python3 apps/founderos.py --config founderos.local.json
 Emulator SSE is intentionally untrusted and cannot approve anything. Production input uses the loopback HMAC bridge in `apps/founderos_input.py`, bound to the exact selected event and request. Codex users must review the project hook with `/hooks` before its first use. See [Claude and ChatGPT/Codex configuration](docs/founderos/CONFIGURATION.md#claude-and-chatgptcodex) and the [production closure register](docs/founderos/PRODUCTION-CLOSURE.md).
 
 The prioritized product direction based on real founder workflows is documented in the [workflow roadmap](docs/founderos/WORKFLOW-ROADMAP.md).
+The hardware behavior observed through BarPilot is pinned and governed in the [BarPilot compatibility profile](docs/founderos/BARPILOT-COMPATIBILITY.md).
 
 <p align="center">
   <img src="docs/founderos/captures/gmail.png" width="720" alt="FounderOS preserving French accents in a Gmail decision" />
@@ -152,6 +158,8 @@ Built something cool? Share it in the [community gallery](https://maxswinkels.gi
 ## Features
 
 - **Firmware-faithful HTTP API**: exact paths, verbs, response shapes and error codes (incl. 409 priority conflicts and `X-API-Token` auth), api_semver 25.0.0
+- **Differential canvas updates**: same-application draws merge by element `id`, so animated icons do not restart scrolling task text
+- **Raw screen readback**: `/api/screen` returns the firmware-compatible 72×16 BGR front buffer and 80×80 grayscale back buffer, including uploaded PNG, JPEG, GIF, WebP and SVG assets, stock icons, and stock animations
 - **Pixel-perfect text**: the device's real TTF fonts, baked to a 1-bpp glyph atlas with `lv_font_conv` using the firmware's own parameters
 - **Real 72×16 animations**: all 12 status themes plus effects, imported straight from the firmware
 - **Complete stock icon set**: 66 draw-tool icons, referenced exactly like the device (`faces/emoji-grinning`, `sun`, `heart`, …)
@@ -167,8 +175,8 @@ Edit text, rectangles and stock icons right on the 72×16 canvas, with the same 
 
 The display panel has two export buttons that produce the files busybar-apps expects in an app folder:
 
-- **PNG** — saves `preview.png` at 720×160 (72×16 LEDs × 10 px) in one click.
-- **GIF** — records `preview.gif` at 20 fps for up to 30 s; click once to start, again to stop and download. Encoding is client-side (no server involved).
+- **PNG** saves `preview.png` at 720×160 (72×16 LEDs × 10 px) in one click.
+- **GIF** records `preview.gif` at 20 fps for up to 30 s. Click once to start, then again to stop and download. Encoding is client-side (no server involved).
 
 ## The API
 
@@ -188,6 +196,7 @@ curl -s -X POST localhost:8080/api/display/draw -H 'content-type: application/js
 |---|---|
 | `POST /api/display/draw` | Draw a frame: `{application_name, priority(1–100), elements[]}` → 409 if priority too low |
 | `DELETE /api/display/draw?application_name=` | Clear (omit query to clear all) |
+| `GET /api/screen?display=0\|1` | Base64 raw framebuffer, front BGR888 or back gray8 |
 | `GET/POST /api/display/brightness?value=auto\|0-100` | Single brightness value |
 | `POST /api/audio/play` · `DELETE /api/audio/play` · `GET/POST /api/audio/volume?volume=` | Sound |
 | `POST /api/assets/upload?application_name=&file=` · `DELETE …` | PNG assets |
@@ -195,6 +204,7 @@ curl -s -X POST localhost:8080/api/display/draw -H 'content-type: application/js
 | `GET/PUT /api/busy/snapshot` · `GET/PUT /api/busy/profiles/{busy\|custom}` | BUSY timer/status |
 | `GET/POST /api/name` · `GET /api/time` · `/api/time/{timestamp,timezone,tzlist}` | Device name / clock |
 | `GET /api/status[/{device,firmware,system,power}]` | Nested status, `uptime` as a string |
+| `WS /api/status/ws` | Status stream, enabled with `{"enable":true}` |
 | `GET /api/version` → `{"api_semver":"25.0.0"}` · `GET /api/transport` · `GET/POST /api/access` | Meta |
 | `POST /api/input?key=` · `POST /api/log_dump` | Buttons / logs |
 | `GET /api/_animations` | *(emulator)* imported-animation manifest with `fps`/`sections` |
@@ -206,6 +216,7 @@ curl -s -X POST localhost:8080/api/display/draw -H 'content-type: application/js
 | `POST /api/_scenario/power` | *(emulator)* `{battery_charge?, state?}` set battery % / charging state (shown in `/api/status/power`) |
 | `POST /api/_scenario/offline` | *(emulator)* `{duration_ms}` reset all non-emulator `/api/*` connections for the window; call again to restore early |
 | `POST /api/_scenario/steal` | *(emulator)* `{priority?=99, duration_ms?}` draw a high-priority frame so lower-priority draws get 409 |
+| `POST /api/_scenario/blocker` | *(emulator)* `{type:menu\|physical_busy\|smart_home, active}` reproduce firmware canvas blockers |
 | `POST /api/_scenario/reset` | *(emulator)* clear all scenario overrides |
 
 ```jsonc
@@ -252,8 +263,9 @@ Same fonts, alignment, colors, scrolling, stock icons, timeouts, priority and as
 <summary>Fidelity notes</summary>
 
 - **Rendering is a faithful approximation.** Assets decode in the browser (1 image pixel = 1 LED), the front display applies gamma 0.35, and the back OLED is grayscale. `busy_tiny` is bitmap-only and falls back to `busy_regular_5px`.
-- **Priority/409 matches the firmware's core rule.** The current owner may redraw at equal priority; a different app needs strictly higher priority to take the screen (else 409). Not emulated: the real device may defer a conflicting request for up to 1.5 s, merges same-app elements by `id`, and expires elements via per-element timeouts.
-- **Stubs or omitted.** Storage, audio, smart_home, wifi, update and BLE endpoints are simplified. `type:"animation"`, `/api/_animations`, `/api/_apps*` (app runner) and `/api/_scenario*` (scenario simulator) are emulator conveniences.
+- **Priority, merge, expiry, and 409 behavior match the observed firmware contract.** The current owner may redraw at equal priority, same-application elements merge by `id`, element leases expire independently, and a different app needs strictly higher priority. Timer, hidden physical-session, device-menu, and smart-home blockers are available as scenarios. The real device may additionally defer a conflicting request for up to 1.5 seconds.
+- **Complete BarPilot API 25 surface.** All 53 unique BarPilot paths and all 69 HTTP operations have explicit, stateful or safely emulated behavior. The status WebSocket is covered separately. The executable matrix lives in `tests/fixtures/barpilot-api25-contract.json`.
+- **Safe emulation boundary.** Firmware installation, cloud account linking, Matter pairing, Wi-Fi, and BLE change emulator state only. They never mutate the host network, account, radio, or firmware. `/api/_animations`, `/api/_apps*`, and `/api/_scenario*` remain emulator conveniences.
 
 </details>
 
@@ -270,8 +282,8 @@ The goal is the fastest way to build, test and show off BUSY Bar apps, with or w
 
 **Fidelity**
 
-- [ ] **Screen stream (`/api/screen`)**: serve the real framebuffer so the official web app and third-party tools can target the emulator
-- [ ] **Back OLED (160×80)**: render `display:"back"` elements
+- [x] **Screen stream (`/api/screen`)**: serve firmware-compatible front and back raw framebuffers so third-party tools can target the emulator
+- [x] **Back OLED framebuffer (80×80)**: render `display:"back"` elements in grayscale readback
 - [x] **Audio playback**: play stock and uploaded sounds, with a beep fallback
 
 **SDK &amp; distribution**

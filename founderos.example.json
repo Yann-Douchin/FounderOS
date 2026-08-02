@@ -4,6 +4,12 @@
     "application_name": "founderos",
     "device_priority": 90,
     "min_hold_seconds": 6,
+    "lease_seconds": 300,
+    "lease_refresh_ratio": 0.8,
+    "conflict_retry_seconds": 2,
+    "conflict_retry_max_seconds": 30,
+    "clear_on_shutdown": true,
+    "text_rendering": "auto",
     "content_icon": {
       "enabled": true,
       "frame_seconds": 1.0

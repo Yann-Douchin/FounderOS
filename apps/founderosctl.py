@@ -39,6 +39,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from founder_os.config import load_config  # noqa: E402
 from founder_os.display.busybar import BusyBarDisplay, DisplayError  # noqa: E402
+from founder_os.display.verification import verify_french_glyphs  # noqa: E402
 from founder_os.oauth import OAuthFlowError, authorize_google, authorize_linear  # noqa: E402
 from founder_os.paths import state_root  # noqa: E402
 from founder_os.secrets import (  # noqa: E402
@@ -99,6 +100,16 @@ def parse_args() -> argparse.Namespace:
     install.add_argument("--skip-emulator", action="store_true")
     service_commands.add_parser("status", help="Show launchd and heartbeat state")
     service_commands.add_parser("uninstall", help="Unload the service and remove its plist")
+
+    display = commands.add_parser("display", help="Inspect and verify the BUSY Bar display")
+    display_commands = display.add_subparsers(dest="display_command", required=True)
+    display_commands.add_parser("status", help="Show firmware capabilities and screen readback sizes")
+    verify = display_commands.add_parser("verify-accents", help="Verify French glyphs using screen readback")
+    verify.add_argument(
+        "--raster-fallback",
+        action="store_true",
+        help="Verify the PNG raster fallback instead of the native global font",
+    )
     return parser.parse_args()
 
 
@@ -113,7 +124,9 @@ def main() -> int:
             return _auth_command(args, config)
         if args.command == "service":
             return _service_command(args, config, config_path)
-    except (OAuthFlowError, SecretError, ServiceError, ValueError) as exc:
+        if args.command == "display":
+            return _display_command(args, config)
+    except (DisplayError, OAuthFlowError, SecretError, ServiceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 2
@@ -278,6 +291,60 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
     return 0
 
 
+def _configured_display(
+    config: dict,
+    *,
+    application_suffix: str = "",
+    priority: int | None = None,
+    text_rendering: str | None = None,
+) -> BusyBarDisplay:
+    display_config = config["display"]
+    token_account = str(display_config.get("api_token_env", "")).strip()
+    resolver = build_secret_resolver(config["secrets"])
+    return BusyBarDisplay(
+        str(display_config["host"]),
+        application_name=str(display_config["application_name"]) + application_suffix,
+        priority=priority if priority is not None else int(display_config["device_priority"]),
+        timeout=float(display_config["request_timeout_seconds"]),
+        api_token=resolver.get(token_account) if token_account else "",
+        api_semver=str(display_config["api_semver"]),
+        text_rendering=text_rendering or str(display_config["text_rendering"]),
+        font_atlas_path=str(REPO_ROOT / "public" / "fonts" / "font-atlas.json"),
+    )
+
+
+def _display_command(args: argparse.Namespace, config: dict) -> int:
+    if args.display_command == "status":
+        display = _configured_display(config)
+        front = display.screen(0)
+        back = display.screen(1)
+        print(json.dumps({
+            "capabilities": display.capabilities().as_dict(),
+            "screen": {
+                "front": {"width": front.width, "height": front.height, "mode": front.mode, "bytes": len(front.pixels)},
+                "back": {"width": back.width, "height": back.height, "mode": back.mode, "bytes": len(back.pixels)},
+            },
+        }, ensure_ascii=False, indent=2))
+        return 0
+    mode = "raster_non_ascii" if args.raster_fallback else "native"
+    display = _configured_display(
+        config,
+        application_suffix="-glyph-check",
+        priority=100,
+        text_rendering=mode,
+    )
+    result = verify_french_glyphs(
+        display,
+        REPO_ROOT / "public" / "fonts" / "font-atlas.json",
+    )
+    payload = result.as_dict()
+    payload["rendering"] = mode
+    if not result.passed and mode == "native":
+        payload["recommended_text_rendering"] = "raster_non_ascii"
+    print(json.dumps(payload, ensure_ascii=False, indent=2))
+    return 0 if result.passed else 4
+
+
 def _restore_launch_agents(snapshots: list[LaunchAgentSnapshot]) -> list[str]:
     failures: list[str] = []
     for snapshot in snapshots:
@@ -338,16 +405,7 @@ def _uses_loopback_display(config: dict) -> bool:
 
 def _validate_display(config: dict, *, wait_seconds: float) -> None:
     display_config = config["display"]
-    token_account = str(display_config.get("api_token_env", "")).strip()
-    resolver = build_secret_resolver(config["secrets"])
-    display = BusyBarDisplay(
-        str(display_config["host"]),
-        application_name=str(display_config["application_name"]),
-        priority=int(display_config["device_priority"]),
-        timeout=float(display_config["request_timeout_seconds"]),
-        api_token=resolver.get(token_account) if token_account else "",
-        api_semver=str(display_config["api_semver"]),
-    )
+    display = _configured_display(config)
     deadline = time.monotonic() + max(0.0, float(wait_seconds))
     while True:
         try:

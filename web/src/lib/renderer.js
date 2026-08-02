@@ -2,6 +2,7 @@
    → { start(), beep() }. Real device fonts (baked glyph atlas), real draw schema,
    animations with sections, stock SVG icons, front gamma, grayscale OLED. */
 import { loadAtlas, rasterize, spaceWidth } from "./atlas.js";
+import { createBackgroundClock } from "./background-clock.js";
 
 export function createRenderer(cv, ocv, getModel, getStamp) {
   const W = 72, H = 16;
@@ -138,7 +139,7 @@ export function createRenderer(cv, ocv, getModel, getStamp) {
 
   const scrollState = new Map();
   let DT = 0;
-  function drawFrame(elements, t, frameStamp, appName) {
+  function drawFrame(elements, t, frameStamp, appName, elementVersions) {
     const nowUnix = Date.now() / 1000, age = t - frameStamp, seen = new Set();
     for (let idx = 0; idx < elements.length; idx++) {
       const el = elements[idx]; if (!el || typeof el !== "object") continue;
@@ -166,11 +167,15 @@ export function createRenderer(cv, ocv, getModel, getStamp) {
         if (m.w <= boxW) { clip = [bx, bx + boxW - 1]; blitMask(m, bx, by, r, g, b); clip = null; }
         else {
           const gap = Math.max(3, spaceWidth(el.font) * 3), fullW = m.w + gap, pxPerSec = el.scroll_rate / 60;
-          const key = (appName || "") + "|" + (el.id != null ? el.id : "#" + idx) + "|" + txt + "|" + boxW; seen.add(key);
-          let st = scrollState.get(key); if (!st) { st = { off: 0, born: t, pauseUntil: 0 }; scrollState.set(key, st); }
+          const elementKey = el.id != null ? "id:" + String(el.id) : "anonymous:" + idx;
+          const revision = elementVersions && elementVersions[elementKey] || 0;
+          const key = (appName || "") + "|" + elementKey + "|" + txt + "|" + boxW + "|" + revision; seen.add(key);
+          let st = scrollState.get(key); if (!st) { st = { born: t }; scrollState.set(key, st); }
           const startDelay = (el.scroll_start_delay || 0) / 1000, repeatDelay = (el.scroll_repeat_delay || 0) / 1000;
-          if (t - st.born >= startDelay && t >= st.pauseUntil) { st.off += pxPerSec * DT; if (st.off >= fullW) { st.off -= fullW; if (repeatDelay > 0) st.pauseUntil = t + repeatDelay; } }
-          const o = Math.floor(st.off); clip = [bx, bx + boxW - 1]; blitMask(m, bx - o, by, r, g, b); blitMask(m, bx - o + fullW, by, r, g, b); clip = null;
+          const elapsed = Math.max(0, t - st.born - startDelay), moving = fullW / pxPerSec;
+          const phase = elapsed % (moving + repeatDelay);
+          const o = phase < moving ? Math.floor(phase * pxPerSec) : 0;
+          clip = [bx, bx + boxW - 1]; blitMask(m, bx - o, by, r, g, b); blitMask(m, bx - o + fullW, by, r, g, b); clip = null;
         }
       } else {
         const [dx, dy] = anchor(el, m.w, m.h);
@@ -215,18 +220,27 @@ export function createRenderer(cv, ocv, getModel, getStamp) {
     beep();
   }
 
-  let last = performance.now() / 1000, oledTick = 0, running = false;
-  function frame(now) {
+  let clock = null, last = 0, oledTick = 0, running = false;
+  function frame() {
     if (!running) return;
-    const t = now / 1000; DT = Math.min(0.1, t - last); last = t;
+    const t = clock.nowSeconds(); DT = Math.max(0, t - last); last = t;
     const model = getModel(), stamp = getStamp();
     const bv = model.brightness; bright = (bv === "auto" || bv == null ? 80 : bv) / 100;
     clearBuf();
     const els = (model.frame && model.frame.elements) || [];
-    if (els.length) drawFrame(els, t, stamp, model.frame.application_name); else drawIdle(t, model.connected);
+    if (els.length) drawFrame(els, t, stamp, model.frame.application_name, model.frame.element_versions); else drawIdle(t, model.connected);
     render();
     oledTick += DT; if (oledTick > 0.25) { drawOled(model); oledTick = 0; }
     requestAnimationFrame(frame);
   }
-  return { start() { if (running) return; running = true; requestAnimationFrame(frame); }, stop() { running = false; }, beep, sound };
+  return {
+    start() {
+      if (running) return;
+      clock = createBackgroundClock(50); clock.start(); last = clock.nowSeconds();
+      running = true; requestAnimationFrame(frame);
+    },
+    stop() { running = false; if (clock) clock.stop(); clock = null; },
+    beep,
+    sound,
+  };
 }

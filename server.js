@@ -14,6 +14,7 @@ const path = require("path");
 const os = require("os");
 const crypto = require("crypto");
 const { spawn, spawnSync } = require("child_process");
+const { renderScreen } = require("./screen_renderer");
 
 const PORT = process.env.PORT ? Number(process.env.PORT) : 8080;
 const HOST = process.env.BUSY_HOST || "127.0.0.1";
@@ -25,6 +26,12 @@ const DIST = path.join(__dirname, "web", "dist");   // built Vue app
 const ANIM_DIR = path.join(PUBLIC, "animations");
 const SOUNDS_DIR = path.join(PUBLIC, "sounds");
 const API_SEMVER = "25.0.0";
+const STATUS_ENDPOINTS = new Set([
+  "/api/status/device",
+  "/api/status/firmware",
+  "/api/status/system",
+  "/api/status/power",
+]);
 
 /* --------------------------- animation manifest -------------------------- */
 function scanAnimations() {
@@ -336,7 +343,22 @@ function saveState() {
     _saveTimer = null;
     const stor = {}; for (const [k, v] of Object.entries(state.storage)) stor[k] = { type: v.type, b64: v.data ? v.data.toString("base64") : null };
     const ass = {}; for (const [k, v] of Object.entries(state.assets)) ass[k] = { b64: v.buf.toString("base64"), type: v.type };
-    const json = JSON.stringify({ storage: stor, assets: ass });
+    const device = {
+      brightness: state.brightness,
+      volume: state.volume,
+      name: state.name,
+      access: state.access,
+      timezone: state.timezone,
+      clock_offset_ms: state.clock_offset_ms,
+      busy_snapshot: state.busy_snapshot,
+      busy_profiles: state.busy_profiles,
+      wifi: state.wifi,
+      ble: state.ble,
+      smart_home: state.smart_home,
+      account: state.account,
+      update: state.update,
+    };
+    const json = JSON.stringify({ storage: stor, assets: ass, device });
     try {
       if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true, mode: 0o700 });
       const tmp = STATE_FILE + ".tmp";
@@ -349,19 +371,51 @@ function saveState() {
 function loadState(st) {
   try {
     if (!fs.existsSync(STATE_FILE)) return;
-    const { storage, assets } = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
+    const { storage, assets, device } = JSON.parse(fs.readFileSync(STATE_FILE, "utf8"));
     if (storage) for (const [k, v] of Object.entries(storage)) st.storage[k] = { type: v.type, data: v.b64 ? Buffer.from(v.b64, "base64") : null };
     if (assets) for (const [k, v] of Object.entries(assets)) st.assets[k] = { buf: Buffer.from(v.b64, "base64"), type: v.type };
+    if (device && typeof device === "object") {
+      for (const key of ["brightness", "volume", "name", "clock_offset_ms"]) {
+        if (device[key] !== undefined) st[key] = device[key];
+      }
+      for (const key of ["access", "timezone", "busy_snapshot", "busy_profiles", "wifi", "ble", "smart_home", "account", "update"]) {
+        if (device[key] && typeof device[key] === "object") st[key] = Object.assign({}, st[key], device[key]);
+      }
+    }
   } catch (e) { console.warn("[persist] could not load state.json, starting empty:", e.message); }
 }
 
 /* ------------------------------ device state ----------------------------- */
 const BAR_SETTINGS = { theme: "busy", show_work_phase_only: false, trigger_smart_home: true };
 const state = {
-  frame: { application_name: null, elements: [], ts: 0, priority: 0 },
+  frame: { application_name: null, elements: [], element_versions: {}, ts: 0, priority: 0 },
   brightness: 80,                 // number 0-100 or "auto"
   volume: 0,
   name: "BUSY-EMULATOR",
+  access: { mode: TOKEN ? "key" : "disabled", key_valid: Boolean(TOKEN) },
+  timezone: { name: "Europe/Madrid", offset: 7200, abbr: "CEST" },
+  clock_offset_ms: 0,
+  wifi: {
+    state: "disconnected", ssid: "", bssid: "", channel: null, rssi: null,
+    security: "WPA2", ip_config: null,
+  },
+  ble: { status: "disabled", address: "" },
+  smart_home: {
+    fabric_count: 0,
+    latest_pairing_status: { value: "not_paired", timestamp: 0 },
+    pairing: null,
+    switch: { state: false, startup: "off" },
+  },
+  account: {
+    linked: false, email: "", id: "", user_id: "", status: "disconnected",
+    backend: { server_url: "default", client_cert_type: "default", ignore_server_cert: false },
+    link: null,
+  },
+  update: {
+    install: { is_allowed: true, action: "none", event: "none", status: "idle", detail: "", download: { received_bytes: 0, total_bytes: 0 } },
+    check: { status: "idle", event: "none", available_version: "emulator-1.3.0" },
+    autoupdate: { is_enabled: false, interval_start: "02:00", interval_end: "05:00" },
+  },
   battery_charge: 100,
   startTime: Date.now(),
   busy_snapshot: { snapshot: { type: "NOT_STARTED", busy_bar_settings: Object.assign({}, BAR_SETTINGS) }, snapshot_timestamp_ms: Date.now() },
@@ -375,10 +429,19 @@ const state = {
 };
 loadState(state);
 let frameSeq = 1;
+let elementExpiryTimer = null;
+const elementExpiries = new Map();
+const elementStartedAt = new Map();
 
 /* --------------------------- scenario simulator -------------------------- */
 // Emulator-only fault injection. Ephemeral by design: never persisted.
-const scenario = { offline_until: 0, power_state: "discharging" };
+const scenario = {
+  offline_until: 0,
+  power_state: "discharging",
+  menu_open: false,
+  physical_busy: false,
+  smart_home_timer: false,
+};
 let offlineTimer = null, stealTimer = null;
 const STEAL_APP = "_scenario.steal";
 function scenarioInfo() {
@@ -388,35 +451,156 @@ function scenarioInfo() {
     battery_charge: state.battery_charge,
     offline_until: scenario.offline_until,
     offline_remaining_ms: Math.max(0, scenario.offline_until - Date.now()),
+    blockers: {
+      menu_open: scenario.menu_open,
+      physical_busy: scenario.physical_busy,
+      smart_home_timer: scenario.smart_home_timer,
+      api_busy: state.busy_snapshot.snapshot.type !== "NOT_STARTED",
+    },
     steal: { active: owns, priority: owns ? state.frame.priority : null },
   };
 }
 // Priority-conflict rule shared by POST /api/display/draw and the steal scenario.
 // Firmware (canvas_draw_rejected): the current owner may redraw at equal
 // priority; a different app needs strictly higher priority to take over.
+function elementKey(element, index) {
+  return element && element.id != null ? `id:${String(element.id)}` : `anonymous:${index}`;
+}
+function elementExpiry(element, now) {
+  const candidates = [];
+  const timeout = Number(element && element.timeout);
+  const displayUntil = Number(element && element.display_until);
+  if (Number.isFinite(timeout) && timeout > 0) candidates.push(now + timeout * 1000);
+  if (Number.isFinite(displayUntil) && displayUntil > 0) candidates.push(displayUntil * 1000);
+  return candidates.length ? Math.min(...candidates) : null;
+}
+function clearFrame() {
+  clearTimeout(elementExpiryTimer); elementExpiryTimer = null;
+  elementExpiries.clear();
+  elementStartedAt.clear();
+  state.frame = { application_name: null, elements: [], element_versions: {}, ts: frameSeq++, priority: 0 };
+}
+function scheduleElementExpiry() {
+  clearTimeout(elementExpiryTimer); elementExpiryTimer = null;
+  if (!elementExpiries.size) return;
+  const next = Math.min(...elementExpiries.values());
+  elementExpiryTimer = setTimeout(() => {
+    elementExpiryTimer = null;
+    if (pruneExpiredElements()) broadcast();
+  }, Math.max(1, next - Date.now()));
+}
+function pruneExpiredElements() {
+  if (!state.frame.elements.length || !elementExpiries.size) return false;
+  const now = Date.now();
+  let changed = false;
+  const kept = [];
+  for (let index = 0; index < state.frame.elements.length; index++) {
+    const element = state.frame.elements[index];
+    const key = elementKey(element, index);
+    const expiry = elementExpiries.get(key);
+    if (expiry != null && expiry <= now) {
+      elementExpiries.delete(key); elementStartedAt.delete(key); changed = true;
+      if (state.frame.element_versions) delete state.frame.element_versions[key];
+    } else kept.push(element);
+  }
+  if (changed) {
+    if (kept.length) state.frame = Object.assign({}, state.frame, { elements: kept, ts: frameSeq++ });
+    else clearFrame();
+  }
+  scheduleElementExpiry();
+  return changed;
+}
+function canvasBlockReason() {
+  if (scenario.physical_busy) return "physical BUSY session is active";
+  if (scenario.menu_open) return "device menu is open";
+  if (scenario.smart_home_timer) return "smart-home timer is active";
+  if (state.busy_snapshot.snapshot.type !== "NOT_STARTED") return "BUSY session is active";
+  return "";
+}
 function drawFrame(appName, elements, priority) {
+  pruneExpiredElements();
   if (state.frame.elements.length) {
     const sameApp = appName === state.frame.application_name;
-    if (sameApp ? priority < state.frame.priority : priority <= state.frame.priority) return false;
+    if (sameApp ? priority < state.frame.priority : priority <= state.frame.priority) {
+      return { ok: false, status: 409, reason: "Not drawn due to low priority" };
+    }
   }
-  state.frame = { application_name: appName, elements, ts: frameSeq++, priority };
-  return true;
+  const now = Date.now();
+  const sameApp = state.frame.elements.length && appName === state.frame.application_name;
+  if (sameApp) {
+    const keys = new Set(state.frame.elements.map((element, index) => elementKey(element, index)));
+    for (let index = 0; index < elements.length; index++) keys.add(elementKey(elements[index], index));
+    if (keys.size > 100) return { ok: false, status: 400, reason: "Elements number limit exceeded" };
+  }
+  const drawRevision = frameSeq++;
+  const elementVersions = sameApp ? Object.assign({}, state.frame.element_versions || {}) : {};
+  let nextElements;
+  if (sameApp) {
+    nextElements = state.frame.elements.slice();
+    const positions = new Map(nextElements.map((element, index) => [elementKey(element, index), index]));
+    for (let index = 0; index < elements.length; index++) {
+      const element = elements[index];
+      const key = elementKey(element, index);
+      if (positions.has(key)) nextElements[positions.get(key)] = element;
+      else { positions.set(key, nextElements.length); nextElements.push(element); }
+      elementStartedAt.set(key, now);
+      elementVersions[key] = drawRevision;
+      const expiry = elementExpiry(element, now);
+      if (expiry == null) elementExpiries.delete(key); else elementExpiries.set(key, expiry);
+    }
+  } else {
+    elementExpiries.clear();
+    elementStartedAt.clear();
+    nextElements = elements.slice();
+    for (let index = 0; index < nextElements.length; index++) {
+      const key = elementKey(nextElements[index], index);
+      elementStartedAt.set(key, now);
+      elementVersions[key] = drawRevision;
+      const expiry = elementExpiry(nextElements[index], now);
+      if (expiry != null) elementExpiries.set(elementKey(nextElements[index], index), expiry);
+    }
+  }
+  if (nextElements.length > 100) return { ok: false, status: 400, reason: "Elements number limit exceeded" };
+  state.frame = { application_name: appName, elements: nextElements, element_versions: elementVersions, ts: drawRevision, priority };
+  scheduleElementExpiry();
+  return { ok: true };
 }
 
 /* ------------------------------ SSE clients ------------------------------ */
 const clients = new Set();
+const statusSockets = new Set();
 function uptimeStr(s) { const d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60; return `${String(d).padStart(2, "0")}d ${String(h).padStart(2, "0")}h ${String(m).padStart(2, "0")}m ${String(ss).padStart(2, "0")}s`; }
 function snapshot() {
+  pruneExpiredElements();
   return {
     frame: state.frame, brightness: state.brightness, volume: state.volume, name: state.name,
     battery_charge: state.battery_charge, uptime: Math.floor((Date.now() - state.startTime) / 1000),
     theme: state.busy_snapshot.snapshot.busy_bar_settings ? state.busy_snapshot.snapshot.busy_bar_settings.theme : null,
     log: state.log.slice(0, 18),
     app: appStatus(),
-    scenario: { offline_until: scenario.offline_until, power_state: scenario.power_state },
+    scenario: scenarioInfo(),
   };
 }
-function broadcast() { const data = `event: state\ndata: ${JSON.stringify(snapshot())}\n\n`; for (const r of clients) { try { r.write(data); } catch (_) {} } }
+function websocketFrame(payload, opcode = 1) {
+  const body = Buffer.isBuffer(payload) ? payload : Buffer.from(String(payload), "utf8");
+  let header;
+  if (body.length < 126) header = Buffer.from([0x80 | opcode, body.length]);
+  else if (body.length <= 0xffff) { header = Buffer.alloc(4); header[0] = 0x80 | opcode; header[1] = 126; header.writeUInt16BE(body.length, 2); }
+  else { header = Buffer.alloc(10); header[0] = 0x80 | opcode; header[1] = 127; header.writeBigUInt64BE(BigInt(body.length), 2); }
+  return Buffer.concat([header, body]);
+}
+function statusSocketBroadcast() {
+  const message = websocketFrame(JSON.stringify(snapshot()));
+  for (const client of statusSockets) {
+    if (!client.enabled || client.socket.destroyed) continue;
+    try { client.socket.write(message); } catch (_) {}
+  }
+}
+function broadcast() {
+  const data = `event: state\ndata: ${JSON.stringify(snapshot())}\n\n`;
+  for (const r of clients) { try { r.write(data); } catch (_) {} }
+  statusSocketBroadcast();
+}
 function emit(ev, p) { const data = `event: ${ev}\ndata: ${JSON.stringify(p)}\n\n`; for (const r of clients) { try { r.write(data); } catch (_) {} } }
 function logCall(method, p, note) { state.log.unshift({ t: Date.now(), method, path: p, note: note || "" }); if (state.log.length > 30) state.log.length = 30; }
 
@@ -425,6 +609,11 @@ const CORS = { "Access-Control-Allow-Origin": "*", "Access-Control-Allow-Headers
 function send(res, code, obj, headers) {
   const body = Buffer.isBuffer(obj) ? obj : Buffer.from(JSON.stringify(obj));
   res.writeHead(code, Object.assign({ "Content-Type": Buffer.isBuffer(obj) ? "application/octet-stream" : "application/json" }, CORS, headers || {}));
+  res.end(body);
+}
+function sendScreen(res, pixels) {
+  const body = Buffer.from(pixels.toString("base64"), "ascii");
+  res.writeHead(200, Object.assign({ "Content-Type": "image/bmp", "Content-Length": body.length }, CORS));
   res.end(body);
 }
 function ok(res, extra) { send(res, 200, Object.assign({ result: "OK" }, extra || {})); }
@@ -440,8 +629,79 @@ function readBody(req) {
 async function readJson(req) { const b = await readBody(req); return b.length ? JSON.parse(b.toString("utf8")) : {}; }
 function isLocal(req) { const a = req.socket.remoteAddress || ""; return a === "::1" || a.includes("127.0.0.1"); }
 function authed(req) { if (!TOKEN) return true; if (isLocal(req)) return true; return req.headers["x-api-token"] === TOKEN; }
+function storagePath(value, { allowRoot = false } = {}) {
+  if (typeof value !== "string" || !value.startsWith("/")) return null;
+  const normalized = path.posix.normalize(value);
+  if (normalized !== "/ext" && !normalized.startsWith("/ext/")) return null;
+  if (!allowRoot && normalized === "/ext") return null;
+  return normalized;
+}
+function storageUsage() {
+  const total = 16 * 1024 * 1024;
+  const used = Object.values(state.storage).reduce((sum, item) => sum + (Buffer.isBuffer(item.data) ? item.data.length : 0), 0);
+  return { used_bytes: used, free_bytes: Math.max(0, total - used), total_bytes: total };
+}
+function storageList(prefix) {
+  const root = storagePath(prefix || "/ext", { allowRoot: true });
+  if (!root) return null;
+  const base = root === "/ext" ? "/ext/" : root.replace(/\/$/, "") + "/";
+  const items = new Map();
+  for (const [entryPath, entry] of Object.entries(state.storage)) {
+    if (!entryPath.startsWith(base)) continue;
+    const relative = entryPath.slice(base.length);
+    if (!relative) continue;
+    const name = relative.split("/")[0];
+    const direct = !relative.includes("/");
+    const existing = items.get(name);
+    if (!existing || !direct) items.set(name, {
+      type: direct ? (entry.type || "file") : "dir",
+      name,
+      size: direct && Buffer.isBuffer(entry.data) ? entry.data.length : 0,
+    });
+  }
+  return Array.from(items.values());
+}
+const EMULATED_TIMEZONES = ["Europe/Madrid", "Europe/Amsterdam", "America/New_York", "UTC"];
+function timezoneRecord(name, timestampMs = Date.now()) {
+  if (!EMULATED_TIMEZONES.includes(name)) return null;
+  try {
+    const offsetName = new Intl.DateTimeFormat("en-US", {
+      timeZone: name,
+      timeZoneName: "shortOffset",
+    }).formatToParts(new Date(timestampMs)).find((part) => part.type === "timeZoneName").value;
+    const match = /^GMT(?:(?<sign>[+-])(?<hours>\d{1,2})(?::(?<minutes>\d{2}))?)?$/.exec(offsetName);
+    if (!match) return null;
+    const sign = match.groups && match.groups.sign === "-" ? -1 : 1;
+    const hours = Number(match.groups && match.groups.hours || 0);
+    const minutes = Number(match.groups && match.groups.minutes || 0);
+    const offset = sign * (hours * 3600 + minutes * 60);
+    const abbr = new Intl.DateTimeFormat("en-US", {
+      timeZone: name,
+      timeZoneName: "short",
+    }).formatToParts(new Date(timestampMs)).find((part) => part.type === "timeZoneName").value;
+    return { name, offset, abbr: name === "UTC" ? "UTC" : abbr };
+  } catch (_) {
+    return null;
+  }
+}
+function formatTimestampInZone(timestampMs, timezoneName) {
+  const zone = timezoneRecord(timezoneName, timestampMs);
+  if (!zone) throw new Error("unknown timezone");
+  const local = new Date(timestampMs + zone.offset * 1000);
+  const pad = (value) => String(value).padStart(2, "0");
+  const sign = zone.offset < 0 ? "-" : "+";
+  const absoluteMinutes = Math.abs(zone.offset) / 60;
+  return `${local.getUTCFullYear()}-${pad(local.getUTCMonth() + 1)}-${pad(local.getUTCDate())}`
+    + `T${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:${pad(local.getUTCSeconds())}`
+    + `${sign}${pad(Math.floor(absoluteMinutes / 60))}:${pad(absoluteMinutes % 60)}`;
+}
+function currentDeviceTimestamp() {
+  const timestamp = Date.now() + Number(state.clock_offset_ms || 0);
+  return formatTimestampInZone(timestamp, state.timezone.name);
+}
+function persistAndBroadcast() { saveState(); broadcast(); }
 
-const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".ttf": "font/ttf", ".woff2": "font/woff2", ".json": "application/json" };
+const MIME = { ".html": "text/html; charset=utf-8", ".js": "text/javascript", ".css": "text/css", ".png": "image/png", ".gif": "image/gif", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp", ".svg": "image/svg+xml", ".ico": "image/x-icon", ".ttf": "font/ttf", ".woff2": "font/woff2", ".json": "application/json" };
 // Decode percent-escapes and resolve inside root (frame files may contain spaces).
 function staticPath(root, sub) {
   let rel; try { rel = decodeURIComponent(sub); } catch (_) { return null; }
@@ -466,7 +726,8 @@ const server = http.createServer(async (req, res) => {
   try { const u = new URL(req.url, "http://localhost"); p = u.pathname; q = Object.fromEntries(u.searchParams); }
   catch (_) { return fail(res, 400, "bad request"); }
   const method = req.method;
-  // scenario: simulated USB/Wi-Fi drop — non-emulator API traffic (incl. preflights) gets a dead socket (ECONNRESET)
+  // Scenario: a simulated USB/Wi-Fi drop gives non-emulator API traffic,
+  // including preflights, a dead socket (ECONNRESET).
   if (scenario.offline_until > Date.now() && p.startsWith("/api/") && !p.startsWith("/api/_")) { req.socket.destroy(); return; }
   if (method === "OPTIONS") { send(res, 204, {}); return; }
 
@@ -499,6 +760,17 @@ const server = http.createServer(async (req, res) => {
 
   try {
     /* ---- display ---- */
+    if (p === "/api/screen" && method === "GET") {
+      const display = Number(q.display || 0);
+      if (display !== 0 && display !== 1) return fail(res, 400, "Bad request: display must be 0 or 1");
+      const pixels = await renderScreen(state.frame, state.assets, {
+        display,
+        elementStartedAt,
+        animations: ANIMATIONS,
+        animationRoot: ANIM_DIR,
+      });
+      logCall("GET", p, `display ${display}`); return sendScreen(res, pixels);
+    }
     if (p === "/api/display/draw" && method === "POST") {
       const b = await readJson(req);
       const appName = b.application_name || b.app_id;   // accept both (community scripts use app_id)
@@ -514,14 +786,17 @@ const server = http.createServer(async (req, res) => {
       for (const el of elements) {
         if (el && el.type === "image" && el.path && state.assets[`${appName}/${el.path}`]) el.path = `${appName}/${el.path}`;
       }
-      if (!drawFrame(appName, elements, priority)) return fail(res, 409, "Not drawn due to low priority");
+      const blocked = canvasBlockReason();
+      if (blocked) return fail(res, 409, `Not drawn: ${blocked}`);
+      const result = drawFrame(appName, elements, priority);
+      if (!result.ok) return fail(res, result.status, result.reason);
       if (b.led_notification_color) emit("led", { color: b.led_notification_color });
       logCall("POST", p, `${appName} · ${elements.length} el · pri ${priority}`); broadcast(); return ok(res);
     }
     if (p === "/api/display/draw" && method === "DELETE") {
       const app = q.application_name;
       if (!app || state.frame.application_name === app || !state.frame.elements.length) {
-        state.frame = { application_name: null, elements: [], ts: frameSeq++, priority: 0 };
+        clearFrame();
       }
       logCall("DELETE", p, app || "all"); broadcast(); return ok(res);
     }
@@ -531,7 +806,7 @@ const server = http.createServer(async (req, res) => {
         const v = q.value;
         if (v === "auto") state.brightness = "auto";
         else { const n = Number(v); if (!(n >= 0 && n <= 100)) return fail(res, 400, "Bad request: value 0-100 or auto"); state.brightness = n; }
-        logCall("POST", p, `value ${v}`); broadcast(); return ok(res);
+        saveState(); logCall("POST", p, `value ${v}`); broadcast(); return ok(res);
       }
     }
 
@@ -557,19 +832,22 @@ const server = http.createServer(async (req, res) => {
     if (p === "/api/audio/play" && method === "DELETE") { logCall("DELETE", p, "stop"); emit("beep", { stop: true }); return ok(res); }
     if (p === "/api/audio/volume") {
       if (method === "GET") { logCall("GET", p); return send(res, 200, { volume: state.volume }); }
-      if (method === "POST") { const n = Number(q.volume); if (!(n >= 0 && n <= 100)) return fail(res, 400, "Bad request: volume 0-100"); state.volume = n; logCall("POST", p, `vol ${n}`); broadcast(); return ok(res); }
+      if (method === "POST") { const n = Number(q.volume); if (!(n >= 0 && n <= 100)) return fail(res, 400, "Bad request: volume 0-100"); state.volume = n; saveState(); logCall("POST", p, `vol ${n}`); broadcast(); return ok(res); }
     }
 
     /* ---- assets (raw octet-stream, ?file=) ---- */
     if (p === "/api/assets/upload" && method === "POST") {
       const app = q.application_name, file = q.file;
       if (!app || !file) return fail(res, 400, "application_name and file required");
+      if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(app) || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(file)) {
+        return fail(res, 400, "application_name and file must be safe names");
+      }
       let buf;
       const ct = req.headers["content-type"] || "";
       if (ct.includes("application/json")) { const b = await readJson(req); buf = Buffer.from(b.data || "", "base64"); }
       else buf = await readBody(req);
       const ext = (file.match(/\.([a-z0-9]+)$/i) || [])[1];
-      const type = { png: "image/png", gif: "image/gif", jpg: "image/jpeg", jpeg: "image/jpeg",
+      const type = { png: "image/png", gif: "image/gif", jpg: "image/jpeg", jpeg: "image/jpeg", webp: "image/webp", svg: "image/svg+xml",
         wav: "audio/wav", mp3: "audio/mpeg", ogg: "audio/ogg" }[(ext || "").toLowerCase()] || "application/octet-stream";
       state.assets[`${app}/${file}`] = { buf, type };
       saveState(); logCall("POST", p, `${app}/${file} · ${buf.length}b`); return ok(res);
@@ -582,13 +860,52 @@ const server = http.createServer(async (req, res) => {
     }
 
     /* ---- storage (?path=, raw bodies) ---- */
-    if (p === "/api/storage/write" && method === "POST") { if (!q.path) return fail(res, 400, "path required"); state.storage[q.path] = { type: "file", data: await readBody(req) }; saveState(); logCall("POST", p, q.path); return ok(res); }
-    if (p === "/api/storage/read" && method === "GET") { const f = state.storage[q.path]; if (!f) return fail(res, 400, "not found"); logCall("GET", p, q.path); return send(res, 200, Buffer.isBuffer(f.data) ? f.data : Buffer.from(String(f.data || ""))); }
-    if (p === "/api/storage/list" && method === "GET") { const pre = q.path || ""; const items = Object.keys(state.storage).filter((k) => k.startsWith(pre)).map((k) => ({ type: state.storage[k].type || "file", name: k, size: state.storage[k].data ? state.storage[k].data.length : 0 })); logCall("GET", p, pre); return send(res, 200, { list: items }); }
-    if (p === "/api/storage/remove" && method === "DELETE") { delete state.storage[q.path]; saveState(); logCall("DELETE", p, q.path); return ok(res); }
-    if (p === "/api/storage/mkdir" && method === "POST") { state.storage[q.path] = { type: "dir", data: null }; saveState(); logCall("POST", p, q.path); return ok(res); }
-    if (p === "/api/storage/rename" && method === "POST") { if (state.storage[q.path]) { state.storage[q.new_path] = state.storage[q.path]; delete state.storage[q.path]; } saveState(); logCall("POST", p, `${q.path}→${q.new_path}`); return ok(res); }
-    if (p === "/api/storage/status" && method === "GET") { return send(res, 200, { used_bytes: 1048576, free_bytes: 15728640, total_bytes: 16777216 }); }
+    if (p === "/api/storage/write" && method === "POST") {
+      const target = storagePath(q.path);
+      if (!target) return fail(res, 400, "valid /ext path required");
+      const data = await readBody(req);
+      if (storageUsage().used_bytes - (state.storage[target] && state.storage[target].data ? state.storage[target].data.length : 0) + data.length > storageUsage().total_bytes) {
+        return fail(res, 507, "storage capacity exceeded");
+      }
+      state.storage[target] = { type: "file", data };
+      saveState(); logCall("POST", p, target); return ok(res, { size: data.length });
+    }
+    if (p === "/api/storage/read" && method === "GET") {
+      const target = storagePath(q.path), item = target && state.storage[target];
+      if (!item || item.type !== "file") return fail(res, 404, "file not found");
+      logCall("GET", p, target); return send(res, 200, Buffer.isBuffer(item.data) ? item.data : Buffer.alloc(0));
+    }
+    if (p === "/api/storage/list" && method === "GET") {
+      const items = storageList(q.path || "/ext");
+      if (!items) return fail(res, 400, "valid /ext path required");
+      logCall("GET", p, q.path || "/ext"); return send(res, 200, { list: items });
+    }
+    if (p === "/api/storage/remove" && method === "DELETE") {
+      const target = storagePath(q.path);
+      if (!target) return fail(res, 400, "valid /ext path required");
+      let removed = 0;
+      for (const key of Object.keys(state.storage)) {
+        if (key === target || key.startsWith(target + "/")) { delete state.storage[key]; removed += 1; }
+      }
+      if (!removed) return fail(res, 404, "path not found");
+      saveState(); logCall("DELETE", p, target); return ok(res, { removed });
+    }
+    if (p === "/api/storage/mkdir" && method === "POST") {
+      const target = storagePath(q.path);
+      if (!target) return fail(res, 400, "valid /ext path required");
+      state.storage[target] = { type: "dir", data: null };
+      saveState(); logCall("POST", p, target); return ok(res);
+    }
+    if (p === "/api/storage/rename" && method === "POST") {
+      const source = storagePath(q.path), destination = storagePath(q.new_path);
+      if (!source || !destination) return fail(res, 400, "valid source and destination paths required");
+      const matches = Object.keys(state.storage).filter((key) => key === source || key.startsWith(source + "/"));
+      if (!matches.length) return fail(res, 404, "source path not found");
+      for (const key of matches) state.storage[destination + key.slice(source.length)] = state.storage[key];
+      for (const key of matches) delete state.storage[key];
+      saveState(); logCall("POST", p, `${source} to ${destination}`); return ok(res, { renamed: matches.length });
+    }
+    if (p === "/api/storage/status" && method === "GET") return send(res, 200, storageUsage());
 
     /* ---- busy timer ---- */
     if (p === "/api/busy/snapshot") {
@@ -600,36 +917,63 @@ const server = http.createServer(async (req, res) => {
         const kept = { type, busy_bar_settings: snap.busy_bar_settings || Object.assign({}, BAR_SETTINGS) };
         for (const k of ["card_id", "is_paused", "time_left_ms", "current_interval", "current_interval_time_total_ms", "current_interval_time_left_ms", "interval_settings"]) if (snap[k] !== undefined) kept[k] = snap[k];
         state.busy_snapshot = { snapshot: kept, snapshot_timestamp_ms: b.snapshot_timestamp_ms || Date.now() };
-        logCall("PUT", p, type); broadcast(); return ok(res);
+        if (type !== "NOT_STARTED" && state.frame.elements.length) clearFrame();
+        saveState(); logCall("PUT", p, type); broadcast(); return ok(res);
       }
     }
     const mProf = p.match(/^\/api\/busy\/profiles\/(busy|custom)$/);
     if (mProf) {
       const slot = mProf[1];
       if (method === "GET") { logCall("GET", p); return send(res, 200, state.busy_profiles[slot]); }
-      if (method === "PUT") { const b = await readJson(req); state.busy_profiles[slot] = Object.assign({}, state.busy_profiles[slot], b, { profile_timestamp_ms: Date.now() }); logCall("PUT", p, slot); return ok(res); }
+      if (method === "PUT") { const b = await readJson(req); state.busy_profiles[slot] = Object.assign({}, state.busy_profiles[slot], b, { profile_timestamp_ms: Date.now() }); saveState(); logCall("PUT", p, slot); return ok(res); }
     }
 
     /* ---- device ---- */
     if (p === "/api/name") {
       if (method === "GET") { logCall("GET", p); return send(res, 200, { name: state.name }); }
-      if (method === "POST") { const b = await readJson(req); if (typeof b.name !== "string") return fail(res, 400, "name required"); state.name = b.name; logCall("POST", p, state.name); broadcast(); return ok(res); }
+      if (method === "POST") { const b = await readJson(req); if (typeof b.name !== "string") return fail(res, 400, "name required"); state.name = b.name; saveState(); logCall("POST", p, state.name); broadcast(); return ok(res); }
     }
-    if (p === "/api/time" && method === "GET") { logCall("GET", p); return send(res, 200, { timestamp: new Date().toISOString() }); }
-    if (p === "/api/time/timestamp" && method === "POST") { logCall("POST", p, q.timestamp); return ok(res); }
-    if (p === "/api/time/timezone") { if (method === "GET") return send(res, 200, { name: "Europe/Amsterdam", offset: 3600, abbr: "CET" }); if (method === "POST") { logCall("POST", p, q.timezone); return ok(res); } }
-    if (p === "/api/time/tzlist" && method === "GET") { return send(res, 200, { list: [{ name: "Europe/Amsterdam", offset: 3600, abbr: "CET" }, { name: "UTC", offset: 0, abbr: "UTC" }] }); }
+    if (p === "/api/time" && method === "GET") { logCall("GET", p); return send(res, 200, { timestamp: currentDeviceTimestamp() }); }
+    if (p === "/api/time/timestamp" && method === "POST") {
+      const timestamp = Date.parse(String(q.timestamp || ""));
+      if (!Number.isFinite(timestamp)) return fail(res, 400, "valid ISO 8601 timestamp required");
+      state.clock_offset_ms = timestamp - Date.now();
+      saveState(); logCall("POST", p, q.timestamp); return ok(res);
+    }
+    if (p === "/api/time/timezone") {
+      if (method === "GET") {
+        const current = timezoneRecord(
+          state.timezone.name,
+          Date.now() + Number(state.clock_offset_ms || 0),
+        );
+        if (current) state.timezone = current;
+        return send(res, 200, state.timezone);
+      }
+      if (method === "POST") {
+        const zone = timezoneRecord(q.timezone);
+        if (!zone) return fail(res, 400, "unknown timezone");
+        state.timezone = zone; saveState(); logCall("POST", p, zone.name); return ok(res);
+      }
+    }
+    if (p === "/api/time/tzlist" && method === "GET") {
+      const timestamp = Date.now() + Number(state.clock_offset_ms || 0);
+      return send(res, 200, { list: EMULATED_TIMEZONES.map((name) => timezoneRecord(name, timestamp)) });
+    }
 
-    if (p === "/api/status" || p.startsWith("/api/status/")) {
+    if (p === "/api/status" || STATUS_ENDPOINTS.has(p)) {
       const up = Math.floor((Date.now() - state.startTime) / 1000);
       const groups = {
-        device: { serial_number: "EMU00000000", usb_mac: "02:00:00:00:00:01", otp_valid: true, firmware_security: "none" },
-        firmware: { version: "emulator-1.1.0", target: "emu", branch: "dev", build_date: "2026-07-22", commit_hash: "emulator", api_semver: API_SEMVER },
-        system: { api_semver: API_SEMVER, uptime: uptimeStr(up), boot_time: Math.floor(state.startTime / 1000), auto_update_enabled: false },
+        device: {
+          serial_number: "EMU00000000", otp_model: "BUSY Bar Emulator",
+          usb_mac: "02:00:00:00:00:01", wifi_mac: "02:00:00:00:00:02", ble_mac: "02:00:00:00:00:03",
+          otp_valid: true, firmware_security: "none", otp_timestamp: 1785628800,
+        },
+        firmware: { version: "emulator-1.2.0", target: "emu", branch: "dev", build_date: "2026-08-02", commit_hash: "emulator", api_semver: API_SEMVER },
+        system: { api_semver: API_SEMVER, uptime: uptimeStr(up), boot_time: Math.floor(state.startTime / 1000), auto_update_enabled: state.update.autoupdate.is_enabled },
         power: { state: scenario.power_state, battery_charge: state.battery_charge,
-          battery_voltage: +(3.5 + state.battery_charge * 0.007).toFixed(2),
-          battery_current: scenario.power_state === "charging" ? 0.35 : scenario.power_state === "charged" ? 0 : -0.12,
-          usb_voltage: scenario.power_state === "discharging" ? 0 : 5 },
+          battery_voltage: Math.round(3500 + state.battery_charge * 7),
+          battery_current: scenario.power_state === "charging" ? 350 : scenario.power_state === "charged" ? 0 : -120,
+          usb_voltage: scenario.power_state === "discharging" ? 0 : 5000 },
       };
       const sub = p.slice("/api/status/".length);
       logCall("GET", p);
@@ -639,9 +983,172 @@ const server = http.createServer(async (req, res) => {
     }
     if (p === "/api/version" && method === "GET") { logCall("GET", p); return send(res, 200, { api_semver: API_SEMVER }); }
     if (p === "/api/transport" && method === "GET") { return send(res, 200, { type: isLocal(req) ? "usb" : "wifi" }); }
-    if (p === "/api/access") { if (method === "GET") return send(res, 200, { mode: TOKEN ? "key" : "disabled", key_valid: !TOKEN }); if (method === "POST") { logCall("POST", p, q.mode); return ok(res); } }
+    if (p === "/api/access") {
+      if (method === "GET") return send(res, 200, state.access);
+      if (method === "POST") {
+        if (!["enabled", "disabled", "key"].includes(q.mode)) return fail(res, 400, "mode must be enabled, disabled, or key");
+        if (q.mode === "key" && !/^[0-9]{4,10}$/.test(String(q.key || ""))) return fail(res, 400, "key must contain 4 to 10 digits");
+        state.access = { mode: q.mode, key_valid: q.mode !== "key" || Boolean(TOKEN) };
+        saveState(); logCall("POST", p, q.mode); return ok(res, { effective_after_restart: true });
+      }
+    }
     if (p === "/api/input" && method === "POST") { const KEYS = ["up", "down", "ok", "back", "start", "busy", "custom", "off", "apps", "settings"]; if (!KEYS.includes(q.key)) return fail(res, 400, "bad key"); logCall("POST", p, q.key); emit("input", { key: q.key }); return ok(res); }
-    if (p === "/api/log_dump" && method === "POST") { logCall("POST", p, q.filename || ""); return ok(res, { path: `/ext/logs/${q.filename || "dump"}.txt` }); }
+    if (p === "/api/log_dump" && method === "POST") {
+      const base = String(q.filename || "dump").replace(/[^A-Za-z0-9._-]/g, "_").slice(0, 80) || "dump";
+      const target = `/ext/logs/${base}.txt`;
+      const lines = state.log.slice().reverse().map((entry) => `${new Date(entry.t).toISOString()} ${entry.method} ${entry.path} ${entry.note || ""}`);
+      state.storage["/ext/logs"] = { type: "dir", data: null };
+      state.storage[target] = { type: "file", data: Buffer.from(lines.join("\n") + "\n", "utf8") };
+      saveState(); logCall("POST", p, base); return ok(res, { path: target });
+    }
+
+    /* ---- connectivity and device services ---- */
+    if (p === "/api/wifi/status" && method === "GET") return send(res, 200, state.wifi);
+    if (p === "/api/wifi/networks" && method === "GET") {
+      const networks = [
+        { ssid: "FounderOS Lab", security: "WPA2", rssi: -38, channel: 6, bssid: "02:00:00:00:10:01" },
+        { ssid: "BUSY Guest", security: "WPA2", rssi: -62, channel: 11, bssid: "02:00:00:00:10:02" },
+      ];
+      return send(res, 200, { count: networks.length, networks });
+    }
+    if (p === "/api/wifi/connect" && method === "POST") {
+      const body = await readJson(req);
+      const ssid = String(body.ssid || "").trim();
+      if (!ssid || ssid.length > 32) return fail(res, 400, "ssid must contain 1 to 32 characters");
+      const security = String(body.security || "WPA2");
+      if (!["open", "WEP", "WPA", "WPA2", "WPA3"].includes(security)) return fail(res, 400, "unsupported Wi-Fi security mode");
+      const requestedIp = body.ip_config && typeof body.ip_config === "object" ? body.ip_config : { ip_method: "dhcp" };
+      const methodName = String(requestedIp.ip_method || "dhcp");
+      if (!["dhcp", "static"].includes(methodName)) return fail(res, 400, "ip_method must be dhcp or static");
+      if (methodName === "static" && !requestedIp.address) return fail(res, 400, "static address required");
+      state.wifi = {
+        state: "connected", ssid, bssid: "02:00:00:00:10:01", channel: 6, rssi: -38, security,
+        ip_config: methodName === "static"
+          ? { ip_method: "static", ip_type: "ipv4", address: String(requestedIp.address), mask: String(requestedIp.mask || "255.255.255.0"), gateway: String(requestedIp.gateway || "") }
+          : { ip_method: "dhcp", ip_type: "ipv4", address: "192.0.2.25", mask: "255.255.255.0", gateway: "192.0.2.1" },
+      };
+      persistAndBroadcast(); logCall("POST", p, ssid); return ok(res);
+    }
+    if (p === "/api/wifi/disconnect" && method === "POST") {
+      state.wifi = { state: "disconnected", ssid: "", bssid: "", channel: null, rssi: null, security: "WPA2", ip_config: null };
+      persistAndBroadcast(); logCall("POST", p, "disconnected"); return ok(res);
+    }
+
+    if (p === "/api/ble/status" && method === "GET") return send(res, 200, state.ble);
+    if (p === "/api/ble/enable" && method === "POST") {
+      state.ble.status = state.ble.address ? "connectable" : "enabled";
+      persistAndBroadcast(); logCall("POST", p, state.ble.status); return ok(res);
+    }
+    if (p === "/api/ble/disable" && method === "POST") {
+      state.ble.status = "disabled";
+      persistAndBroadcast(); logCall("POST", p, "disabled"); return ok(res);
+    }
+    if (p === "/api/ble/pairing" && method === "DELETE") {
+      state.ble.address = "";
+      if (state.ble.status !== "disabled") state.ble.status = "enabled";
+      persistAndBroadcast(); logCall("DELETE", p, "pairing removed"); return ok(res);
+    }
+
+    if (p === "/api/smart_home/pairing" && method === "GET") {
+      if (state.smart_home.pairing && state.smart_home.pairing.available_until <= Date.now()) {
+        state.smart_home.pairing = null;
+        state.smart_home.latest_pairing_status = { value: "expired", timestamp: Math.floor(Date.now() / 1000) };
+      }
+      return send(res, 200, {
+        fabric_count: state.smart_home.fabric_count,
+        latest_pairing_status: state.smart_home.latest_pairing_status,
+      });
+    }
+    if (p === "/api/smart_home/pairing" && method === "POST") {
+      const availableUntil = Date.now() + 15 * 60 * 1000;
+      state.smart_home.pairing = {
+        manual_code: "34970112332",
+        qr_code: "MT:Y.K9042C00KA0648G00",
+        available_until: availableUntil,
+      };
+      state.smart_home.latest_pairing_status = { value: "window_open", timestamp: Math.floor(Date.now() / 1000) };
+      persistAndBroadcast(); logCall("POST", p, "window open"); return send(res, 200, state.smart_home.pairing);
+    }
+    if (p === "/api/smart_home/pairing" && method === "DELETE") {
+      state.smart_home.fabric_count = 0;
+      state.smart_home.pairing = null;
+      state.smart_home.latest_pairing_status = { value: "erased", timestamp: Math.floor(Date.now() / 1000) };
+      persistAndBroadcast(); logCall("DELETE", p, "all pairings removed"); return ok(res);
+    }
+    if (p === "/api/smart_home/switch" && method === "GET") return send(res, 200, state.smart_home.switch);
+    if (p === "/api/smart_home/switch" && method === "POST") {
+      const body = await readJson(req);
+      if (typeof body.state !== "boolean") return fail(res, 400, "boolean state required");
+      const startup = body.startup === undefined ? state.smart_home.switch.startup : String(body.startup);
+      if (!["on", "off", "toggle", "last"].includes(startup)) return fail(res, 400, "startup must be on, off, toggle, or last");
+      state.smart_home.switch = { state: body.state, startup };
+      persistAndBroadcast(); logCall("POST", p, body.state ? "on" : "off"); return ok(res);
+    }
+
+    if (p === "/api/account/info" && method === "GET") {
+      return send(res, 200, state.account.linked
+        ? { linked: true, email: state.account.email, id: state.account.id, user_id: state.account.user_id }
+        : { linked: false });
+    }
+    if (p === "/api/account/status" && method === "GET") return send(res, 200, { status: state.account.status });
+    if (p === "/api/account/backend" && method === "GET") return send(res, 200, state.account.backend);
+    if (p === "/api/account/backend" && method === "PUT") {
+      const body = await readJson(req);
+      const serverUrl = String(body.server_url || "default").trim();
+      const certType = String(body.client_cert_type || "default").trim();
+      if (!serverUrl || serverUrl.length > 512 || !certType || certType.length > 64) return fail(res, 400, "invalid backend configuration");
+      state.account.backend = { server_url: serverUrl, client_cert_type: certType, ignore_server_cert: Boolean(body.ignore_server_cert) };
+      persistAndBroadcast(); logCall("PUT", p, serverUrl); return ok(res);
+    }
+    if (p === "/api/account/link" && method === "POST") {
+      state.account.link = { code: "734921", expires_at: Math.floor(Date.now() / 1000) + 600 };
+      state.account.status = "link_pending";
+      persistAndBroadcast(); logCall("POST", p, "link pending"); return send(res, 200, state.account.link);
+    }
+    if (p === "/api/account" && method === "DELETE") {
+      state.account.linked = false; state.account.email = ""; state.account.id = ""; state.account.user_id = "";
+      state.account.status = "disconnected"; state.account.link = null;
+      persistAndBroadcast(); logCall("DELETE", p, "unlinked"); return ok(res);
+    }
+
+    if (p === "/api/update/status" && method === "GET") {
+      return send(res, 200, { install: state.update.install, check: state.update.check });
+    }
+    if (p === "/api/update/check" && method === "POST") {
+      state.update.check = { status: "completed", event: "update_available", available_version: "emulator-1.3.0" };
+      persistAndBroadcast(); logCall("POST", p, "completed"); return ok(res);
+    }
+    if (p === "/api/update/changelog" && method === "GET") {
+      const version = String(q.version || state.update.check.available_version || "emulator-1.3.0");
+      return send(res, 200, { version, changelog: "Emulator compatibility release with the complete BarPilot API 25 contract." });
+    }
+    if (p === "/api/update/install" && method === "POST") {
+      const version = String(q.version || state.update.check.available_version || "").trim();
+      if (!version) return fail(res, 400, "version required");
+      state.update.install = { is_allowed: true, action: "install", event: "requested", status: "completed", detail: version, download: { received_bytes: 1, total_bytes: 1 } };
+      persistAndBroadcast(); logCall("POST", p, version); return ok(res);
+    }
+    if (p === "/api/update/abort_download" && method === "POST") {
+      state.update.install = { is_allowed: true, action: "none", event: "aborted", status: "idle", detail: "", download: { received_bytes: 0, total_bytes: 0 } };
+      persistAndBroadcast(); logCall("POST", p, "aborted"); return ok(res);
+    }
+    if (p === "/api/update/autoupdate" && method === "GET") return send(res, 200, state.update.autoupdate);
+    if (p === "/api/update/autoupdate" && method === "POST") {
+      const body = await readJson(req);
+      if (typeof body.is_enabled !== "boolean") return fail(res, 400, "boolean is_enabled required");
+      const validTime = (value) => /^([01]\d|2[0-3]):[0-5]\d$/.test(String(value));
+      const start = body.interval_start || state.update.autoupdate.interval_start;
+      const end = body.interval_end || state.update.autoupdate.interval_end;
+      if (!validTime(start) || !validTime(end)) return fail(res, 400, "intervals must use HH:MM");
+      state.update.autoupdate = { is_enabled: body.is_enabled, interval_start: start, interval_end: end };
+      persistAndBroadcast(); logCall("POST", p, body.is_enabled ? "enabled" : "disabled"); return ok(res);
+    }
+    if (p === "/api/update" && method === "POST") {
+      const firmware = await readBody(req);
+      if (!firmware.length) return fail(res, 400, "firmware payload required");
+      state.update.install = { is_allowed: true, action: "upload", event: "completed", status: "completed", detail: `${firmware.length} bytes`, download: { received_bytes: firmware.length, total_bytes: firmware.length } };
+      persistAndBroadcast(); logCall("POST", p, `${firmware.length} bytes`); return ok(res);
+    }
 
     /* ---- emulator: app runner ---- */
     if (p === "/api/_apps" && method === "GET") { return send(res, 200, { apps: scanApps(), app: appStatus() }); }
@@ -667,7 +1174,7 @@ const server = http.createServer(async (req, res) => {
             // Launcher-only: Run means "put this app on screen now", so release the
             // display first (same as a bare DELETE /api/display/draw). The draw API's
             // arbitration itself stays firmware-faithful for apps run outside the UI.
-            if (state.frame.elements.length) { state.frame = { application_name: null, elements: [], ts: frameSeq++, priority: 0 }; broadcast(); }
+            if (state.frame.elements.length) { clearFrame(); broadcast(); }
             try { resolve(await startApp(entry, userArgs)); } catch (e) { reject(e); }
           });
         });
@@ -722,17 +1229,29 @@ const server = http.createServer(async (req, res) => {
         { id: "s1", type: "rectangle", x: 0, y: 0, width: 72, height: 16, border_width: 1, border_color: "0xFF3C3CFF", fill: "none", display: "front" },
         { id: "s2", type: "text", text: `PRIORITY ${priority}`, x: 36, y: 8, font: "small", color: "0xFF3C3CFF", align: "center", display: "front" },
       ];
-      if (!drawFrame(STEAL_APP, elements, priority)) return fail(res, 409, "Not drawn due to low priority");
+      const result = drawFrame(STEAL_APP, elements, priority);
+      if (!result.ok) return fail(res, result.status, result.reason);
       clearTimeout(stealTimer); stealTimer = null;
       if (duration != null) {
-        stealTimer = setTimeout(() => { stealTimer = null; if (state.frame.application_name === STEAL_APP) { state.frame = { application_name: null, elements: [], ts: frameSeq++, priority: 0 }; broadcast(); } }, duration);
+        stealTimer = setTimeout(() => { stealTimer = null; if (state.frame.application_name === STEAL_APP) { clearFrame(); broadcast(); } }, duration);
       }
       logCall("POST", p, `pri ${priority}${duration ? ` · ${duration}ms` : ""}`); broadcast(); return ok(res, { priority });
+    }
+    if (p === "/api/_scenario/blocker" && method === "POST") {
+      const b = await readJson(req);
+      const fields = { menu: "menu_open", physical_busy: "physical_busy", smart_home: "smart_home_timer" };
+      const field = fields[b.type];
+      if (!field || typeof b.active !== "boolean") return fail(res, 400, "Bad request: type menu|physical_busy|smart_home and boolean active required");
+      scenario[field] = b.active;
+      if (b.active && b.type !== "menu" && state.frame.elements.length) clearFrame();
+      logCall("POST", p, `${b.type} ${b.active ? "on" : "off"}`); broadcast(); return ok(res, { blockers: scenarioInfo().blockers });
     }
     if (p === "/api/_scenario/reset" && method === "POST") {
       clearTimeout(offlineTimer); offlineTimer = null; scenario.offline_until = 0;
       clearTimeout(stealTimer); stealTimer = null;
-      if (state.frame.application_name === STEAL_APP) { state.frame = { application_name: null, elements: [], ts: frameSeq++, priority: 0 }; }
+      if (state.frame.application_name === STEAL_APP) clearFrame();
+      scenario.menu_open = false; scenario.physical_busy = false; scenario.smart_home_timer = false;
+      state.busy_snapshot = { snapshot: { type: "NOT_STARTED", busy_bar_settings: Object.assign({}, BAR_SETTINGS) }, snapshot_timestamp_ms: Date.now() };
       scenario.power_state = "discharging"; state.battery_charge = 100;
       logCall("POST", p, "reset"); broadcast(); return ok(res);
     }
@@ -740,6 +1259,65 @@ const server = http.createServer(async (req, res) => {
     fail(res, 404, `no route for ${method} ${p}`);
   } catch (err) { fail(res, 400, err.message || "bad request"); }
 });
+
+function consumeWebsocketFrames(client, chunk) {
+  client.buffer = Buffer.concat([client.buffer, chunk]);
+  while (client.buffer.length >= 2) {
+    const first = client.buffer[0], second = client.buffer[1];
+    const opcode = first & 0x0f, masked = Boolean(second & 0x80);
+    if (!masked) { client.socket.destroy(); return; }
+    let length = second & 0x7f, offset = 2;
+    if (length === 126) { if (client.buffer.length < 4) return; length = client.buffer.readUInt16BE(2); offset = 4; }
+    else if (length === 127) {
+      if (client.buffer.length < 10) return;
+      const large = client.buffer.readBigUInt64BE(2); if (large > 65536n) { client.socket.destroy(); return; }
+      length = Number(large); offset = 10;
+    }
+    const maskLength = masked ? 4 : 0;
+    if (client.buffer.length < offset + maskLength + length) return;
+    const mask = masked ? client.buffer.subarray(offset, offset + 4) : null;
+    offset += maskLength;
+    const payload = Buffer.from(client.buffer.subarray(offset, offset + length));
+    client.buffer = client.buffer.subarray(offset + length);
+    if (mask) for (let index = 0; index < payload.length; index++) payload[index] ^= mask[index % 4];
+    if (opcode === 8) { try { client.socket.write(websocketFrame(payload, 8)); } catch (_) {} client.socket.end(); return; }
+    if (opcode === 9) { try { client.socket.write(websocketFrame(payload, 10)); } catch (_) {} continue; }
+    if (opcode !== 1) continue;
+    try {
+      const message = JSON.parse(payload.toString("utf8"));
+      if (typeof message.enable === "boolean") {
+        client.enabled = message.enable;
+        if (client.enabled) client.socket.write(websocketFrame(JSON.stringify(snapshot())));
+      }
+    } catch (_) {}
+  }
+}
+
+server.on("upgrade", (req, socket) => {
+  let pathname;
+  try { pathname = new URL(req.url, "http://localhost").pathname; } catch (_) { socket.destroy(); return; }
+  if (pathname !== "/api/status/ws" || String(req.headers.upgrade || "").toLowerCase() !== "websocket") { socket.destroy(); return; }
+  if (TOKEN && !isLocal(req) && req.headers["x-api-token"] !== TOKEN) {
+    socket.write("HTTP/1.1 403 Forbidden\r\nConnection: close\r\n\r\n"); socket.destroy(); return;
+  }
+  const key = req.headers["sec-websocket-key"];
+  if (!key) { socket.destroy(); return; }
+  const accept = crypto.createHash("sha1").update(String(key) + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").digest("base64");
+  socket.write(
+    "HTTP/1.1 101 Switching Protocols\r\n"
+    + "Upgrade: websocket\r\n"
+    + "Connection: Upgrade\r\n"
+    + `Sec-WebSocket-Accept: ${accept}\r\n\r\n`
+  );
+  const client = { socket, enabled: false, buffer: Buffer.alloc(0) };
+  statusSockets.add(client);
+  socket.on("data", (chunk) => consumeWebsocketFrames(client, chunk));
+  socket.on("close", () => statusSockets.delete(client));
+  socket.on("error", () => statusSockets.delete(client));
+});
+
+const statusSocketTimer = setInterval(statusSocketBroadcast, 1000);
+statusSocketTimer.unref();
 
 function killChild() {
   if (!appProc || !appProc.child) return;
@@ -749,12 +1327,34 @@ function killChild() {
   try { spawnSync("kill", ["-9", String(-pid)]); } catch (_) {}
   try { spawnSync("kill", ["-9", String(pid)]); } catch (_) {}
 }
-process.on("SIGINT", () => { killChild(); process.exit(0); });
-process.on("SIGTERM", () => { killChild(); process.exit(0); });
+function startServer() {
+  process.on("SIGINT", () => { killChild(); process.exit(0); });
+  process.on("SIGTERM", () => { killChild(); process.exit(0); });
+  server.listen(PORT, HOST, () => {
+    console.log(`\n  BUSY Bar emulator running`);
+    console.log(`  ├─ display : http://${HOST}:${PORT}/`);
+    console.log(`  ├─ API base: http://${HOST}:${PORT}/api  (api_semver ${API_SEMVER})`);
+    console.log(`  └─ ${Object.keys(ANIMATIONS).length} device animation(s)${TOKEN ? " · X-API-Token required for non-localhost" : ""}\n`);
+  });
+  return server;
+}
 
-server.listen(PORT, HOST, () => {
-  console.log(`\n  BUSY Bar emulator running`);
-  console.log(`  ├─ display : http://${HOST}:${PORT}/`);
-  console.log(`  ├─ API base: http://${HOST}:${PORT}/api  (api_semver ${API_SEMVER})`);
-  console.log(`  └─ ${Object.keys(ANIMATIONS).length} device animation(s)${TOKEN ? " · X-API-Token required for non-localhost" : ""}\n`);
-});
+if (require.main === module) startServer();
+
+module.exports = {
+  API_SEMVER,
+  canvasBlockReason,
+  clearFrame,
+  consumeWebsocketFrames,
+  drawFrame,
+  formatTimestampInZone,
+  elementExpiries,
+  elementStartedAt,
+  pruneExpiredElements,
+  scenario,
+  server,
+  startServer,
+  state,
+  timezoneRecord,
+  websocketFrame,
+};

@@ -221,7 +221,7 @@ def run_loop(fn, interval=1.0, cleanup=None):
             except BusyBarError as e:
                 print(f"error: {e}")
                 if "409" in str(e):
-                    print("hint: another app owns the display — stop it or "
+                    print("hint: another app owns the display. Stop it or "
                           "curl -X DELETE http://<host>/api/display/draw")
                 raise SystemExit(1)
             time.sleep(interval)

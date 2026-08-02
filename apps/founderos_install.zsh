@@ -48,6 +48,10 @@ if [[ ! -f "${repository_root}/web/dist/index.html" ]]; then
   print -u2 "error: BUSY Bar emulator frontend is not built; run npm run build first"
   exit 2
 fi
+if [[ ! -f "${repository_root}/node_modules/sharp/package.json" ]]; then
+  print -u2 "error: production image decoder is not installed; run npm install first"
+  exit 2
+fi
 
 /bin/mkdir -p "${bootstrap_root}"
 /bin/chmod 700 "${runtime_state}" "${bootstrap_root}"
@@ -69,16 +73,21 @@ archive_path="${temporary_directory}/runtime.tar"
   founder_os \
   apps \
   public/brand \
+  public/animations \
   public/fonts \
   public/icons \
   public/sounds \
   public/icons.json \
-  server.js
+  server.js \
+  screen_renderer.js \
+  package.json \
+  package-lock.json
 /usr/bin/tar -xf "${archive_path}" -C "${temporary_directory}"
 /bin/rm "${archive_path}"
 
 /bin/mkdir -p "${temporary_directory}/web"
 /bin/cp -R "${repository_root}/web/dist" "${temporary_directory}/web/dist"
+/bin/cp -R "${repository_root}/node_modules" "${temporary_directory}/node_modules"
 staged_config="${temporary_directory}/founderos.runtime.json"
 /bin/cp "${config_source}" "${staged_config}"
 

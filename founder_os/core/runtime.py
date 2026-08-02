@@ -83,6 +83,8 @@ class FounderOSRuntime:
                 timeout=float(display_config["request_timeout_seconds"]),
                 api_token=api_token,
                 api_semver=str(display_config["api_semver"]),
+                text_rendering=str(display_config["text_rendering"]),
+                font_atlas_path=str(Path(__file__).resolve().parents[2] / "public" / "fonts" / "font-atlas.json"),
             )
         self.display = display
         self.validate_display_on_start = bool(display_config["validate_on_start"])
@@ -91,6 +93,11 @@ class FounderOSRuntime:
         self.refresh_seconds = float(runtime_config["refresh_seconds"])
         self.min_hold_seconds = float(display_config["min_hold_seconds"])
         self.show_idle = bool(display_config["show_idle"])
+        self.display_lease_seconds = float(display_config["lease_seconds"])
+        self.display_lease_refresh_ratio = float(display_config["lease_refresh_ratio"])
+        self.display_retry_seconds = float(display_config["conflict_retry_seconds"])
+        self.display_retry_max_seconds = float(display_config["conflict_retry_max_seconds"])
+        self.clear_on_shutdown = bool(display_config["clear_on_shutdown"])
         icon_config = display_config["content_icon"]
         self.content_icon_enabled = bool(icon_config["enabled"])
         self.icon_frame_seconds = float(icon_config["frame_seconds"])
@@ -140,6 +147,15 @@ class FounderOSRuntime:
         self._idle_drawn = False
         self._last_icon_frame: int | None = None
         self._last_frame_signature: tuple[tuple[str, str], ...] | None = None
+        self._last_frame_elements: dict[str, dict[str, Any]] = {}
+        self._display_lease_until = 0.0
+        self._display_lease_renew_at = 0.0
+        self._display_retry_at = 0.0
+        self._display_retry_count = 0
+        self._display_retry_event_id: str | None = None
+        self._last_display_error = ""
+        self._needs_full_redraw = False
+        self._display_initialized = not isinstance(self.display, BusyBarDisplay)
         self._displayed_event_id: str | None = None
         self._stop = False
         self.health_reporter = (
@@ -212,6 +228,8 @@ class FounderOSRuntime:
             raise DisplayError(
                 f"BUSY Bar API major {actual!r} is incompatible with expected {self.expected_api_semver!r}"
             )
+        rendering = self.display.resolve_text_rendering()
+        self.log.info("BUSY Bar Unicode rendering resolved to %s", rendering)
 
     def stop(self) -> None:
         self._stop = True
@@ -222,6 +240,11 @@ class FounderOSRuntime:
         self.scheduler.close()
         if self.health_reporter:
             self.health_reporter.close()
+        if self.clear_on_shutdown and isinstance(self.display, BusyBarDisplay):
+            try:
+                self.display.clear()
+            except DisplayError as exc:
+                self.log.debug("could not clear BUSY Bar during shutdown: %s", exc)
 
     def handle_input(self, value: str | InputEvent) -> str | None:
         input_event = value if isinstance(value, InputEvent) else InputEvent(key=str(value))
@@ -311,26 +334,72 @@ class FounderOSRuntime:
 
     def _render(self, selected: RankedEvent | None, now: datetime) -> tuple[bool, str]:
         monotonic = time.monotonic()
-        changed = (selected.event.id if selected else None) != (self._selected.event.id if self._selected else None)
+        event_id = selected.event.id if selected else None
+        changed = event_id != (self._selected.event.id if self._selected else None)
+        content_changed = bool(
+            selected is not None
+            and self._selected is not None
+            and selected.event != self._selected.event
+        )
         refresh_due = monotonic - self._last_draw_at >= self.refresh_seconds
+        lease_refresh_due = bool(
+            self._display_lease_renew_at
+            and monotonic >= self._display_lease_renew_at
+        )
         icon_frame = (
             int(monotonic / self.icon_frame_seconds)
             if selected is not None and self.content_icon_enabled
             else None
         )
         icon_changed = icon_frame != self._last_icon_frame
-        if not changed and not refresh_due and not icon_changed:
+        if (
+            not changed
+            and not content_changed
+            and not refresh_due
+            and not icon_changed
+            and not lease_refresh_due
+        ):
             return False, ""
+        if event_id != self._display_retry_event_id:
+            self._reset_display_retry()
+        if monotonic < self._display_retry_at:
+            self._displayed_event_id = None
+            return False, self._last_display_error
         self._displayed_event_id = None
         try:
+            if not self._display_initialized:
+                self.display.clear()
+                self._display_initialized = True
             if selected:
                 frame = event_layout(selected, now, icon_frame=icon_frame)
                 signature = _frame_signature(frame)
                 if self._last_frame_signature is not None and signature != self._last_frame_signature:
                     self.display.clear()
                     self._last_frame_signature = None
-                self.display.draw(frame)
+                    self._last_frame_elements = {}
+                full_draw = changed or lease_refresh_due or self._needs_full_redraw or not self._last_frame_elements
+                if full_draw:
+                    lease_seconds = self.display_lease_seconds
+                    if selected.event.expires_at is not None:
+                        lease_seconds = min(
+                            lease_seconds,
+                            max(1.0, (selected.event.expires_at - now).total_seconds()),
+                        )
+                    self._display_lease_until = now.timestamp() + lease_seconds
+                    self._display_lease_renew_at = (
+                        monotonic + lease_seconds * self.display_lease_refresh_ratio
+                    )
+                    payload = _with_display_until(frame, self._display_lease_until)
+                elif content_changed or icon_changed:
+                    payload = _changed_elements(frame, self._last_frame_elements)
+                    payload = _with_display_until(payload, self._display_lease_until)
+                else:
+                    payload = _refresh_probe(frame)
+                    payload = _with_display_until(payload, self._display_lease_until)
+                if payload:
+                    self.display.draw(payload)
                 self._last_frame_signature = signature
+                self._last_frame_elements = _elements_by_id(frame)
                 self._displayed_event_id = selected.event.id
                 if changed:
                     self.memory.mark_displayed(selected.event, now)
@@ -342,27 +411,58 @@ class FounderOSRuntime:
                 if self._last_frame_signature is not None and signature != self._last_frame_signature:
                     self.display.clear()
                     self._last_frame_signature = None
-                self.display.draw(frame)
+                    self._last_frame_elements = {}
+                self._display_lease_until = now.timestamp() + self.display_lease_seconds
+                self._display_lease_renew_at = (
+                    monotonic + self.display_lease_seconds * self.display_lease_refresh_ratio
+                )
+                self.display.draw(_with_display_until(frame, self._display_lease_until))
                 self._last_frame_signature = signature
+                self._last_frame_elements = _elements_by_id(frame)
                 self._displayed_event_id = None
                 self.memory.clear_current()
                 self._idle_drawn = True
             else:
                 self.display.clear()
                 self._last_frame_signature = None
+                self._last_frame_elements = {}
+                self._display_lease_until = 0.0
+                self._display_lease_renew_at = 0.0
                 self._displayed_event_id = None
                 self.memory.clear_current()
                 self._idle_drawn = False
             self._selected = selected
             self._last_draw_at = monotonic
             self._last_icon_frame = icon_frame
+            self._needs_full_redraw = False
+            self._reset_display_retry()
             return True, ""
         except DisplayConflict as exc:
             self.log.info("BUSY Bar is owned by a higher-priority app: %s", exc)
+            self._schedule_display_retry(event_id, monotonic, str(exc))
             return False, str(exc)
         except DisplayError as exc:
             self.log.warning("display unavailable: %s", exc)
+            self._schedule_display_retry(event_id, monotonic, str(exc))
             return False, str(exc)
+
+    def _schedule_display_retry(self, event_id: str | None, monotonic: float, error: str) -> None:
+        delay = min(
+            self.display_retry_max_seconds,
+            self.display_retry_seconds * (2 ** min(self._display_retry_count, 8)),
+        )
+        self._display_retry_count += 1
+        self._display_retry_at = monotonic + delay
+        self._display_retry_event_id = event_id
+        self._last_display_error = error
+        self._needs_full_redraw = True
+        self._displayed_event_id = None
+
+    def _reset_display_retry(self) -> None:
+        self._display_retry_at = 0.0
+        self._display_retry_count = 0
+        self._display_retry_event_id = None
+        self._last_display_error = ""
 
     def _tie_breaker(self, config: Mapping[str, Any]) -> TieBreaker:
         if not config.get("enabled", False):
@@ -389,3 +489,38 @@ class FounderOSRuntime:
 
 def _frame_signature(elements: list[Mapping[str, Any]]) -> tuple[tuple[str, str], ...]:
     return tuple((str(element.get("id", "")), str(element.get("type", ""))) for element in elements)
+
+
+def _elements_by_id(elements: list[Mapping[str, Any]]) -> dict[str, dict[str, Any]]:
+    return {str(element.get("id", index)): dict(element) for index, element in enumerate(elements)}
+
+
+def _changed_elements(
+    elements: list[Mapping[str, Any]],
+    previous: Mapping[str, Mapping[str, Any]],
+) -> list[dict[str, Any]]:
+    changed: list[dict[str, Any]] = []
+    for index, element in enumerate(elements):
+        key = str(element.get("id", index))
+        if previous.get(key) != element:
+            changed.append(dict(element))
+    return changed
+
+
+def _refresh_probe(elements: list[Mapping[str, Any]]) -> list[dict[str, Any]]:
+    for element in elements:
+        if not element.get("scroll_rate"):
+            return [dict(element)]
+    return [dict(elements[0])] if elements else []
+
+
+def _with_display_until(
+    elements: list[Mapping[str, Any]],
+    display_until: float,
+) -> list[dict[str, Any]]:
+    result: list[dict[str, Any]] = []
+    for element in elements:
+        leased = dict(element)
+        leased["display_until"] = int(display_until)
+        result.append(leased)
+    return result

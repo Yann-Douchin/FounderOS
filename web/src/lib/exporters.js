@@ -1,5 +1,5 @@
 /* Export a draw payload as ready-to-paste code (JSON / curl / Python via
-   apps/busybar.py). Pure functions, no DOM — kwargs equal to the busybar.py
+   apps/busybar.py). Pure functions with no DOM. Keyword arguments equal the busybar.py
    builder defaults are omitted so the Python reads like hand-written app code. */
 
 export function toJson(payload) {

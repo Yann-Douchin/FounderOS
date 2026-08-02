@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import plistlib
+import re
 import shutil
 import stat
 import subprocess
@@ -22,13 +23,14 @@ from founder_os.paths import ensure_private_directory, state_root
 
 LAUNCH_AGENT_LABEL = "com.founderos.runtime"
 EMULATOR_LAUNCH_AGENT_LABEL = "com.founderos.busybar-emulator"
-_RUNTIME_DIRECTORIES = ("founder_os", "apps", "public", "web/dist")
-_RUNTIME_FILES = ("server.js",)
-_IGNORED_RUNTIME_DIRECTORIES = {"__pycache__"}
+_RUNTIME_DIRECTORIES = ("founder_os", "apps", "public", "web/dist", "node_modules")
+_RUNTIME_FILES = ("server.js", "screen_renderer.js", "package.json", "package-lock.json")
+_IGNORED_RUNTIME_DIRECTORIES = {"__pycache__", ".bin"}
 _IGNORED_RUNTIME_FILES = {".DS_Store"}
 _IGNORED_RUNTIME_SUFFIXES = {".pyc", ".pyo"}
-_IGNORED_RUNTIME_SUBTREES = {Path("public/animations")}
+_IGNORED_RUNTIME_SUBTREES: set[Path] = set()
 _LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 3
+_MINIMUM_NODE_VERSION = (20, 9, 0)
 
 
 class ServiceError(RuntimeError):
@@ -199,13 +201,18 @@ def emulator_launch_agent_payload(
     python = Path(python_executable).expanduser().resolve()
     state = Path(runtime_state_root).expanduser().resolve() if runtime_state_root else state_root().resolve()
     server = repository_path / "server.js"
+    renderer = repository_path / "screen_renderer.js"
+    sharp_manifest = repository_path / "node_modules" / "sharp" / "package.json"
     web_index = repository_path / "web" / "dist" / "index.html"
     if not server.is_file():
         raise ServiceError(f"BUSY Bar emulator entry point was not found: {server}")
     if not web_index.is_file():
         raise ServiceError("BUSY Bar emulator frontend is not built; run npm run build first")
+    if not renderer.is_file() or not sharp_manifest.is_file():
+        raise ServiceError("BUSY Bar screen decoder is not installed; run npm ci first")
     if not node.is_file():
         raise ServiceError(f"Node.js executable was not found: {node}")
+    _validate_node_version(node)
     if not python.is_file():
         raise ServiceError(f"Python executable was not found: {python}")
     if not 1 <= int(port) <= 65535:
@@ -230,6 +237,28 @@ def emulator_launch_agent_payload(
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         },
     }
+
+
+def _validate_node_version(executable: Path) -> tuple[int, int, int]:
+    try:
+        result = subprocess.run(
+            [str(executable), "--version"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise ServiceError(f"Node.js version could not be inspected: {executable}") from exc
+    match = re.fullmatch(r"v(\d+)\.(\d+)\.(\d+)", result.stdout.strip())
+    if result.returncode != 0 or not match:
+        raise ServiceError(f"Node.js returned an invalid version: {executable}")
+    version = tuple(int(part) for part in match.groups())
+    if version < _MINIMUM_NODE_VERSION:
+        required = ".".join(str(part) for part in _MINIMUM_NODE_VERSION)
+        found = ".".join(str(part) for part in version)
+        raise ServiceError(f"Node.js {required} or newer is required, found {found}")
+    return version
 
 
 def install_launch_agent(
@@ -603,6 +632,8 @@ def _validate_runtime_deployment(root: Path, deployment_id: str) -> None:
         "founder_os/__init__.py",
         "founderos.runtime.json",
         "server.js",
+        "screen_renderer.js",
+        "node_modules/sharp/package.json",
         "web/dist/index.html",
     ):
         path = root / required

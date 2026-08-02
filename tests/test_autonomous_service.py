@@ -37,13 +37,17 @@ NOW = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
 
 def make_runtime_source(root: Path) -> tuple[Path, Path]:
     repository = root / "repository"
-    for directory in ("founder_os", "apps", "public", "web/dist"):
+    for directory in ("founder_os", "apps", "public", "web/dist", "node_modules/sharp"):
         (repository / directory).mkdir(parents=True, exist_ok=True)
     (repository / "founder_os" / "__init__.py").write_text("", encoding="utf-8")
     (repository / "apps" / "founderos.py").write_text("print('ready')\n", encoding="utf-8")
     (repository / "public" / "font.txt").write_text("écran", encoding="utf-8")
     (repository / "web" / "dist" / "index.html").write_text("<main>FounderOS</main>", encoding="utf-8")
     (repository / "server.js").write_text("'use strict';\n", encoding="utf-8")
+    (repository / "screen_renderer.js").write_text("'use strict';\n", encoding="utf-8")
+    (repository / "package.json").write_text('{"dependencies":{"sharp":"0.35.3"}}', encoding="utf-8")
+    (repository / "package-lock.json").write_text('{"lockfileVersion":3}', encoding="utf-8")
+    (repository / "node_modules" / "sharp" / "package.json").write_text('{"name":"sharp"}', encoding="utf-8")
     config = root / "founderos.local.json"
     config.write_text('{"runtime":{"timezone":"Europe/Madrid"}}', encoding="utf-8")
     return repository, config
@@ -389,14 +393,18 @@ class AutonomousServiceTests(unittest.TestCase):
             config_mode = stat.S_IMODE(first.config_path.stat().st_mode)
             source_mode = stat.S_IMODE((first.root / "apps" / "founderos.py").stat().st_mode)
             cache_exists = (first.root / "apps" / "__pycache__").exists()
-            stock_animation_exists = (first.root / "public" / "animations").exists()
+            stock_animation_exists = (first.root / "public" / "animations" / "stock" / "frame.png").exists()
+            screen_renderer_exists = (first.root / "screen_renderer.js").exists()
+            sharp_exists = (first.root / "node_modules" / "sharp" / "package.json").exists()
             staged_config_name = first.config_path.name
         self.assertEqual(first, second)
         self.assertEqual(root_mode, 0o700)
         self.assertEqual(config_mode, 0o600)
         self.assertEqual(source_mode, 0o600)
         self.assertFalse(cache_exists)
-        self.assertFalse(stock_animation_exists)
+        self.assertTrue(stock_animation_exists)
+        self.assertTrue(screen_renderer_exists)
+        self.assertTrue(sharp_exists)
         self.assertEqual(staged_config_name, "founderos.runtime.json")
 
     def test_runtime_bundle_digest_changes_with_configuration(self) -> None:
@@ -554,9 +562,15 @@ class AutonomousServiceTests(unittest.TestCase):
             server = root / "server.js"
             node = root / "node"
             web_index = root / "web" / "dist" / "index.html"
+            renderer = root / "screen_renderer.js"
+            sharp_manifest = root / "node_modules" / "sharp" / "package.json"
             web_index.parent.mkdir(parents=True)
+            sharp_manifest.parent.mkdir(parents=True)
             server.write_text("", encoding="utf-8")
-            node.write_text("", encoding="utf-8")
+            renderer.write_text("", encoding="utf-8")
+            sharp_manifest.write_text('{"name":"sharp"}', encoding="utf-8")
+            node.write_text("#!/bin/sh\nprintf 'v24.0.0\\n'\n", encoding="utf-8")
+            node.chmod(0o700)
             web_index.write_text("", encoding="utf-8")
             payload = emulator_launch_agent_payload(
                 repository=root,
@@ -570,6 +584,26 @@ class AutonomousServiceTests(unittest.TestCase):
         self.assertEqual(environment["PORT"], "8080")
         self.assertNotIn("TOKEN", json.dumps(payload))
         self.assertEqual(payload["Umask"], 0o077)
+
+    def test_emulator_service_rejects_an_unsupported_node_version(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "web" / "dist").mkdir(parents=True)
+            (root / "node_modules" / "sharp").mkdir(parents=True)
+            (root / "server.js").write_text("", encoding="utf-8")
+            (root / "screen_renderer.js").write_text("", encoding="utf-8")
+            (root / "web" / "dist" / "index.html").write_text("", encoding="utf-8")
+            (root / "node_modules" / "sharp" / "package.json").write_text("{}", encoding="utf-8")
+            node = root / "node"
+            node.write_text("#!/bin/sh\nprintf 'v18.20.0\\n'\n", encoding="utf-8")
+            node.chmod(0o700)
+            with self.assertRaisesRegex(ServiceError, "20.9.0 or newer"):
+                emulator_launch_agent_payload(
+                    repository=root,
+                    node_executable=node,
+                    python_executable=sys.executable,
+                    runtime_state_root=root / "state",
+                )
 
     def test_clipboard_secret_import_reads_without_printing_and_clears(self) -> None:
         read_result = type("Result", (), {"returncode": 0, "stdout": "xoxb-private\n"})()

@@ -36,7 +36,7 @@
           @click="toggleOffline"
         >{{ offlineLeft > 0 ? 'Restore now' : 'Drop connection' }}</button>
       </div>
-      <div v-if="offlineLeft > 0" class="status-line err">API offline — restores in {{ (offlineLeft / 1000).toFixed(1) }} s</div>
+      <div v-if="offlineLeft > 0" class="status-line err">API offline, restores in {{ (offlineLeft / 1000).toFixed(1) }} s</div>
       <div v-else class="status-line"></div>
       <div class="muted-note" style="margin-top:10px">Every non-emulator /api/* request gets its connection reset, like a real USB/Wi-Fi drop. The web UI, /events and /api/_* stay reachable.</div>
     </div>
@@ -74,14 +74,29 @@
         <button class="pill" :disabled="!stealActive" @click="release">Release</button>
       </div>
       <div class="kv" style="margin-top:12px">
-        <span class="k">Owner</span><span class="v">{{ device.frame.application_name || '—' }}</span>
-        <span class="k">Priority</span><span class="v">{{ device.frame.elements.length ? device.frame.priority : '—' }}</span>
+        <span class="k">Owner</span><span class="v">{{ device.frame.application_name || 'None' }}</span>
+        <span class="k">Priority</span><span class="v">{{ device.frame.elements.length ? device.frame.priority : 'None' }}</span>
       </div>
       <div class="status-line err" style="margin-top:8px">{{ stealStatus }}</div>
-      <div class="muted-note" style="margin-top:10px">Draws a PRIORITY N frame as app _scenario.steal. A lower-priority app now gets 409 Not drawn due to low priority — run apps/clock.py to watch it cope.</div>
+      <div class="muted-note" style="margin-top:10px">Draws a PRIORITY N frame as app _scenario.steal. A lower-priority app now gets 409 Not drawn due to low priority. Run apps/clock.py to watch it cope.</div>
     </div>
 
-    <!-- 5. Reset -->
+    <!-- 5. Firmware canvas blockers -->
+    <div class="card glass">
+      <h2 class="card-title"><span class="badge" v-html="icons.square"></span>Firmware canvas blockers</h2>
+      <div class="chips">
+        <button
+          v-for="item in BLOCKERS" :key="item.type"
+          class="pill" :class="{ solid: blockerActive(item.field) }"
+          @click="toggleBlocker(item)"
+        >{{ item.label }}</button>
+      </div>
+      <div class="muted-note" style="margin-top:12px">
+        Firmware 1.1.1 rejects every canvas draw while a timer, a device menu, or a smart-home timer owns the screen. The physical BUSY case intentionally remains absent from GET /api/busy/snapshot.
+      </div>
+    </div>
+
+    <!-- 6. Reset -->
     <div class="card glass">
       <div class="row">
         <div class="rl">
@@ -104,6 +119,11 @@ import { device, api, apiJson } from '../../composables/useDevice'
 import { icons } from '../../icons'
 
 const KEYS = ['up','down','ok','back','start','busy','custom','off','apps','settings']
+const BLOCKERS = [
+  { type: 'physical_busy', field: 'physical_busy', label: 'Physical BUSY session' },
+  { type: 'menu', field: 'menu_open', label: 'Device menu' },
+  { type: 'smart_home', field: 'smart_home_timer', label: 'Smart-home timer' },
+]
 const fill = v => ({ '--fill': v + '%' })
 
 // ticking clock for the offline countdown (SSE only pushes on change)
@@ -112,7 +132,7 @@ let tick
 onMounted(() => { tick = setInterval(() => { now.value = Date.now() }, 250) })
 onUnmounted(() => clearInterval(tick))
 
-/* power — same local-ref + 130ms debounce pattern as Settings.vue */
+/* Power uses the same local-ref and 130 ms debounce pattern as Settings.vue. */
 const localCharge = ref(null)
 const charge = computed(() => localCharge.value ?? device.battery_charge)
 let chT
@@ -144,9 +164,15 @@ async function steal() {
   const body = { priority: +prio.value }
   if (+autoMs.value > 0) body.duration_ms = +autoMs.value
   const r = await apiJson('POST', '/api/_scenario/steal', body)
-  if (r.status !== 200) stealStatus.value = r.status === 409 ? '409 — current frame has a higher priority' : (r.json.error || `Error ${r.status}`)
+  if (r.status !== 200) stealStatus.value = r.status === 409 ? '409, current frame has a higher priority' : (r.json.error || `Error ${r.status}`)
 }
 function release() { api('DELETE', '/api/display/draw', { application_name: '_scenario.steal' }) }
+
+/* firmware canvas blockers */
+const blockerActive = field => Boolean(device.scenario?.blockers?.[field])
+function toggleBlocker(item) {
+  apiJson('POST', '/api/_scenario/blocker', { type: item.type, active: !blockerActive(item.field) })
+}
 
 function resetAll() { apiJson('POST', '/api/_scenario/reset', {}) }
 </script>
