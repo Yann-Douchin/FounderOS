@@ -96,20 +96,16 @@
       "poll_interval_seconds": 2
     },
     "github": {
-      "enabled": false,
-      "status": "planned"
+      "enabled": false
     },
     "stripe": {
-      "enabled": false,
-      "status": "planned"
+      "enabled": false
     },
     "shopify": {
-      "enabled": false,
-      "status": "planned"
+      "enabled": false
     },
     "home_assistant": {
-      "enabled": false,
-      "status": "planned"
+      "enabled": false
     }
   }
 }

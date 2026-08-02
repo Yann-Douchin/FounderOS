@@ -181,6 +181,9 @@ _SUCCESS_KEYWORDS = (
 
 def select_content_icon(event: Event) -> str:
     """Choose one of the six governed state icons from event semantics."""
+    explicit = str(event.metadata.get("visual_state") or "").strip().casefold()
+    if explicit in ICON_FRAMES:
+        return explicit
     searchable = _searchable_text(" ".join((event.title, event.body, event.kind)))
     if event.urgency == "critical" or event.kind in {"blocker", "incident"}:
         return "blocked"

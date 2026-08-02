@@ -12,6 +12,7 @@ from threading import RLock
 from typing import Any, Mapping
 
 from founder_os.actions import ActionOutbox
+from founder_os.closure import ClosureEngine, ObligationLedger
 from founder_os.config import load_config
 from founder_os.connectors.registry import build_connectors
 from founder_os.core.event_bus import EventBus
@@ -22,6 +23,7 @@ from founder_os.display.layouts import event_layout, idle_layout
 from founder_os.health import HealthReporter
 from founder_os.interaction import EmulatorInputListener, InputEvent, SignedInputListener
 from founder_os.models import RankedEvent, utc_now
+from founder_os.paths import state_root
 from founder_os.ranking.deterministic import DeterministicRanker
 from founder_os.ranking.llm import NoLLMFallback, OpenAIResponsesTieBreaker, TieBreaker
 from founder_os.ranking.memory import RankingMemory
@@ -60,6 +62,26 @@ class FounderOSRuntime:
             retention_days=float(config["memory"]["retention_days"]),
             max_entries=int(config["memory"]["max_entries"]),
         )
+        closure_config = dict(config["closure"])
+        memory_parent = Path(str(config["memory"]["path"])).expanduser().resolve().parent
+        ledger_path = Path(str(closure_config["ledger_path"])).expanduser().resolve()
+        default_ledger_path = (state_root() / "obligations.sqlite3").resolve()
+        if memory_parent != ledger_path.parent and ledger_path == default_ledger_path:
+            closure_config["ledger_path"] = str(memory_parent / "obligations.sqlite3")
+            closure_config["snapshot_path"] = str(memory_parent / "obligations.json")
+        closure_config["timezone"] = str(closure_config.get("timezone") or runtime_config["timezone"])
+        self.closure_engine = (
+            ClosureEngine(
+                closure_config,
+                ObligationLedger(
+                    closure_config["ledger_path"],
+                    audit_max_entries=closure_config.get("audit_max_entries", 100_000),
+                ),
+            )
+            if bool(closure_config["enabled"])
+            else None
+        )
+        self.rank_raw_events = bool(closure_config.get("rank_raw_events", False))
         self.connectors = build_connectors(config["connectors"], secrets=self.secrets)
         self.scheduler = Scheduler(
             self.connectors,
@@ -181,13 +203,29 @@ class FounderOSRuntime:
         now = now or utc_now()
         connector_counts = self.scheduler.poll_due(now, force=force_poll)
         self.bus.prune(now)
+        source_events = self.bus.active(now)
+        if self.closure_engine:
+            closure_events = self.closure_engine.reconcile(source_events, now)
+            system_events = self.closure_engine.system_events(source_events)
+            rankable_events = closure_events + system_events
+            if self.rank_raw_events:
+                rankable_events.extend(
+                    event for event in source_events
+                    if event.kind not in {"permission_request", "connector_health", "agent_usage"}
+                )
+        else:
+            rankable_events = source_events
         with self._state_lock:
-            candidate = self.rank_engine.select(self.bus.active(now), now)
-            candidate = self._respect_hold(candidate, now)
+            candidate = self.rank_engine.select(rankable_events, now)
+            candidate = self._respect_hold(
+                candidate,
+                now,
+                active_event_ids={event.id for event in rankable_events},
+            )
             displayed, error = self._render(candidate, now)
         state = RuntimeState(
             selected=candidate,
-            event_count=len(self.bus.active(now)),
+            event_count=len(rankable_events),
             connector_counts=connector_counts,
             connector_health=self.scheduler.health_snapshot(),
             displayed=displayed,
@@ -238,6 +276,8 @@ class FounderOSRuntime:
         if self.input_listener:
             self.input_listener.close()
         self.scheduler.close()
+        if self.closure_engine:
+            self.closure_engine.close()
         if self.health_reporter:
             self.health_reporter.close()
         if self.clear_on_shutdown and isinstance(self.display, BusyBarDisplay):
@@ -292,6 +332,17 @@ class FounderOSRuntime:
                         return decision
                 return None
             if input_event.key == self.acknowledge_key:
+                obligation_id = str(event.metadata.get("obligation_id", ""))
+                if (
+                    obligation_id
+                    and str(event.metadata.get("obligation_state", "")) == "ready"
+                    and self.closure_engine is not None
+                ):
+                    self.closure_engine.ledger.transition(
+                        obligation_id,
+                        "closed",
+                        reason="final close from trusted BUSY Bar input",
+                    )
                 self.memory.acknowledge(event)
                 self.bus.remove(event.id)
                 self._selected = None
@@ -318,16 +369,25 @@ class FounderOSRuntime:
                 "kind": event.kind,
             }
 
-    def _respect_hold(self, candidate: RankedEvent | None, now: datetime) -> RankedEvent | None:
+    def _respect_hold(
+        self,
+        candidate: RankedEvent | None,
+        now: datetime,
+        *,
+        active_event_ids: set[str] | None = None,
+    ) -> RankedEvent | None:
         monotonic = time.monotonic()
         if candidate and candidate.event.kind == "permission_request":
             return candidate
+        active_ids = active_event_ids
+        if active_ids is None:
+            active_ids = {event.id for event in self.bus.active(now)}
         if (
             self._selected
             and candidate
             and candidate.event.id != self._selected.event.id
             and monotonic - self._selected_since < self.min_hold_seconds
-            and any(event.id == self._selected.event.id for event in self.bus.active(now))
+            and self._selected.event.id in active_ids
         ):
             return self._selected
         return candidate

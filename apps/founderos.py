@@ -47,7 +47,9 @@ def main() -> int:
             name: {"enabled": name == "demo"}
             for name in (
                 "demo", "linear", "slack", "gmail", "calendar", "linkedin",
-                "claude", "chatgpt_codex", "github", "stripe", "shopify", "home_assistant",
+                "claude", "chatgpt_codex", "notion", "drive", "sheets", "github",
+                "deployment", "sentry", "posthog", "shopify", "superhuman", "stripe",
+                "home_assistant",
             )
         }
         overrides["connectors"]["demo"]["scenario"] = args.scenario

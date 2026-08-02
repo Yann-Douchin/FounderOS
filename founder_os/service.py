@@ -233,6 +233,7 @@ def emulator_launch_agent_payload(
             "BUSY_HOST": "127.0.0.1",
             "BUSY_DATA_DIR": str(state / "emulator"),
             "BUSY_PYTHON": str(python),
+            "FOUNDEROS_CLOSURE_SNAPSHOT": str(state / "obligations.json"),
             "PORT": str(int(port)),
             "PATH": "/usr/local/bin:/opt/homebrew/bin:/usr/bin:/bin:/usr/sbin:/sbin",
         },

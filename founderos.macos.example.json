@@ -20,6 +20,10 @@
     "health_enabled": true,
     "heartbeat_seconds": 15
   },
+  "closure": {
+    "enabled": true,
+    "default_owner": "self"
+  },
   "display": {
     "host": "127.0.0.1:8080",
     "application_name": "founderos",
@@ -72,6 +76,7 @@
       "channel_ids": ["C0123456789"],
       "channel_names": {"C0123456789": "launch"},
       "mention_markers": ["<@U012FOUNDER>"],
+      "self_user_ids": ["U012FOUNDER"],
       "critical": true,
       "poll_interval_seconds": 60
     },
@@ -81,7 +86,10 @@
       "refresh_token_env": "GOOGLE_REFRESH_TOKEN",
       "client_id_env": "GOOGLE_CLIENT_ID",
       "client_secret_env": "GOOGLE_CLIENT_SECRET",
-      "query": "is:unread newer_than:2d",
+      "queries": [
+        {"query": "is:unread newer_than:2d", "direction": "incoming"},
+        {"query": "in:sent newer_than:30d {\"I will\" \"I'll\" \"I’ll\" \"we will\" \"je vais\" \"je vous envoie\" \"nous allons\" \"je reviens vers\"}", "direction": "outgoing"}
+      ],
       "critical": true,
       "poll_interval_seconds": 60
     },
@@ -90,6 +98,17 @@
     },
     "chatgpt_codex": {
       "enabled": false
-    }
+    },
+    "notion": {"enabled": false},
+    "drive": {"enabled": false},
+    "sheets": {"enabled": false},
+    "github": {"enabled": false},
+    "deployment": {"enabled": false},
+    "sentry": {"enabled": false},
+    "posthog": {"enabled": false},
+    "shopify": {"enabled": false},
+    "superhuman": {"enabled": false},
+    "stripe": {"enabled": false},
+    "home_assistant": {"enabled": false}
   }
 }

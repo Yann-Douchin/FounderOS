@@ -10,6 +10,19 @@ const { decodeMedia, decodePng, renderScreen } = require("../screen_renderer");
 
 (async () => {
 
+const closureSnapshot = process.env.FOUNDEROS_CLOSURE_SNAPSHOT;
+if (closureSnapshot) {
+  fs.writeFileSync(closureSnapshot, JSON.stringify({
+    schema_version: 1,
+    generated_at: "2026-08-02T10:00:00+00:00",
+    obligations: [{ id: "obligation:test", title: "Décision validée" }],
+    relationships: [],
+  }), { encoding: "utf8", mode: 0o600 });
+  const closure = emulator.readClosureSnapshot();
+  assert.strictEqual(closure.available, true);
+  assert.strictEqual(closure.obligations[0].title, "Décision validée");
+}
+
 function rectangle(id, x, y, color, extra = {}) {
   return Object.assign({
     id, type: "rectangle", x, y, width: 1, height: 1,

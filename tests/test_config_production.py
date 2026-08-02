@@ -68,6 +68,29 @@ class ProductionConfigTests(unittest.TestCase):
                     },
                 })
 
+    def test_workspace_connectors_require_explicit_data_boundaries(self) -> None:
+        cases = (
+            ("notion", "database_ids"),
+            ("drive", "folder_ids"),
+            ("sheets", "spreadsheets"),
+        )
+        for connector, expected in cases:
+            with self.subTest(connector=connector):
+                with self.assertRaisesRegex(ConfigError, expected):
+                    load_config(overrides={"connectors": {connector: {"enabled": True}}})
+
+    def test_connector_allowlists_reject_query_and_path_injection(self) -> None:
+        cases = (
+            {"notion": {"database_ids": ["id' or true"]}},
+            {"drive": {"folder_ids": ["id' in parents"]}},
+            {"github": {"repositories": ["owner/repo/extra"]}},
+            {"home_assistant": {"entities": ["person.yann"]}},
+        )
+        for connectors in cases:
+            with self.subTest(connectors=connectors):
+                with self.assertRaises(ConfigError):
+                    load_config(overrides={"connectors": connectors})
+
 
 if __name__ == "__main__":
     unittest.main()

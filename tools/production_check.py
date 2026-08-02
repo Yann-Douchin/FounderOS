@@ -67,6 +67,16 @@ def check_required_files() -> None:
         "founder_os/service.py",
         "founder_os/interaction.py",
         "founder_os/core/scheduler.py",
+        "founder_os/closure/engine.py",
+        "founder_os/closure/ledger.py",
+        "founder_os/closure/models.py",
+        "founder_os/connectors/notion.py",
+        "founder_os/connectors/drive.py",
+        "founder_os/connectors/github.py",
+        "founder_os/connectors/observability.py",
+        "founder_os/connectors/commerce.py",
+        "founder_os/connectors/superhuman.py",
+        "web/src/components/tabs/Obligations.vue",
         "founder_os/display/capabilities.py",
         "founder_os/display/verification.py",
         "package-lock.json",
@@ -160,6 +170,7 @@ def check_production_config() -> None:
                 "LINEAR_TEAM_KEY": "BUSY",
                 "SLACK_CHANNEL_ID": "C00000000",
                 "SLACK_MENTION_MARKER": "<@U00000000>",
+                "SLACK_SELF_USER_ID": "U00000000",
             }
         )
         previous = dict(os.environ)
@@ -177,6 +188,17 @@ def check_production_config() -> None:
     linear = config["connectors"]["linear"]
     if linear.get("scope") != "portfolio" or not linear.get("team_keys"):
         raise CheckFailure("production Linear must use an allowlisted portfolio scope")
+    if not config["closure"].get("enabled"):
+        raise CheckFailure("the production example does not enable obligation governance")
+    required_live = {"linear", "calendar", "slack", "gmail"}
+    enabled = {
+        name for name, value in config["connectors"].items()
+        if isinstance(value, dict) and value.get("enabled")
+    }
+    if not required_live.issubset(enabled):
+        raise CheckFailure("the production example does not activate the four primary live connectors")
+    if config["closure"].get("rank_raw_events"):
+        raise CheckFailure("production must rank governed obligations instead of duplicating raw events")
 
 
 def check_autonomous_service() -> None:

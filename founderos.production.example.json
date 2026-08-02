@@ -4,6 +4,17 @@
     "timezone": "Europe/Madrid",
     "connector_workers": 6
   },
+  "closure": {
+    "enabled": true,
+    "default_owner": "self",
+    "proof_profiles": {
+      "release": {
+        "required_categories": ["deployment", "analytics", "market", "language", "pricing", "device"],
+        "minimum_categories": 6,
+        "required_scopes": {}
+      }
+    }
+  },
   "display": {
     "host": "127.0.0.1:8080",
     "application_name": "founderos",
@@ -69,6 +80,8 @@
       "token_env": "SLACK_BOT_TOKEN",
       "channel_ids": ["${SLACK_CHANNEL_ID}"],
       "mention_markers": ["${SLACK_MENTION_MARKER}"],
+      "self_user_ids": ["${SLACK_SELF_USER_ID}"],
+      "max_threads_per_poll": 10,
       "critical": true,
       "poll_interval_seconds": 60
     },
@@ -79,7 +92,10 @@
       "refresh_token_env": "GOOGLE_REFRESH_TOKEN",
       "client_id_env": "GOOGLE_CLIENT_ID",
       "client_secret_env": "GOOGLE_CLIENT_SECRET",
-      "query": "is:unread newer_than:2d",
+      "queries": [
+        {"query": "is:unread newer_than:2d", "direction": "incoming"},
+        {"query": "in:sent newer_than:30d {\"I will\" \"I'll\" \"I’ll\" \"we will\" \"je vais\" \"je vous envoie\" \"nous allons\" \"je reviens vers\"}", "direction": "outgoing"}
+      ],
       "critical": true,
       "poll_interval_seconds": 60
     },
@@ -103,9 +119,16 @@
       },
       "poll_interval_seconds": 2
     },
-    "github": {"enabled": false, "status": "planned"},
-    "stripe": {"enabled": false, "status": "planned"},
-    "shopify": {"enabled": false, "status": "planned"},
-    "home_assistant": {"enabled": false, "status": "planned"}
+    "notion": {"enabled": false, "mode": "api", "token_env": "NOTION_API_TOKEN", "database_ids": [], "allow_all_shared_pages": false},
+    "drive": {"enabled": false, "mode": "api", "refresh_token_env": "GOOGLE_REFRESH_TOKEN", "client_id_env": "GOOGLE_CLIENT_ID", "client_secret_env": "GOOGLE_CLIENT_SECRET", "folder_ids": [], "allow_all_files": false},
+    "sheets": {"enabled": false, "mode": "api", "refresh_token_env": "GOOGLE_REFRESH_TOKEN", "client_id_env": "GOOGLE_CLIENT_ID", "client_secret_env": "GOOGLE_CLIENT_SECRET", "spreadsheets": []},
+    "github": {"enabled": false, "mode": "api", "token_env": "GITHUB_TOKEN", "repositories": [], "deployment_workflows": ["deploy", "release", "production"]},
+    "deployment": {"enabled": false, "mode": "api", "endpoint": "", "token_env": "DEPLOYMENT_API_TOKEN"},
+    "sentry": {"enabled": false, "mode": "api", "token_env": "SENTRY_AUTH_TOKEN", "organization": "", "projects": []},
+    "posthog": {"enabled": false, "mode": "api", "token_env": "POSTHOG_PERSONAL_API_KEY", "project_id": "", "checks": []},
+    "shopify": {"enabled": false, "mode": "api", "token_env": "SHOPIFY_ACCESS_TOKEN", "shop": "", "required_scopes": ["read_products"]},
+    "superhuman": {"enabled": false, "mode": "api", "refresh_token_env": "GOOGLE_REFRESH_TOKEN", "client_id_env": "GOOGLE_CLIENT_ID", "client_secret_env": "GOOGLE_CLIENT_SECRET", "query": "label:reminder newer_than:30d"},
+    "stripe": {"enabled": false, "mode": "api", "token_env": "STRIPE_RESTRICTED_KEY"},
+    "home_assistant": {"enabled": false, "mode": "api", "endpoint": "", "token_env": "HOME_ASSISTANT_TOKEN", "entities": []}
   }
 }

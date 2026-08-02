@@ -1,100 +1,81 @@
-# Founder workflow roadmap
+# Founder workflow closure program
 
-This roadmap is derived from a bounded review of recent Linear work, calendar structure, Slack activity, and email follow-ups. It records general workflow patterns only. Private messages, customer data, and personal identifiers do not belong in the repository.
+This program is derived from a bounded review of recent Linear work, calendar structure, Slack activity, and email follow-ups. It records general workflow patterns only. Private messages, customer data, and personal identifiers do not belong in the repository.
 
-## What the founder workflow actually contains
+## Product model
 
-The dominant unit of work is not an assigned task. It is a decision or dependency that moves across several systems:
+FounderOS now treats the durable unit of work as an obligation, not an unread item. Every obligation records an owner, counterparty, next actor, due date, project, relationship, operational gates, evidence, state, source observations, and an append-only transition audit. Connectors still emit normalized events only. The deterministic closure engine correlates and governs those events before ranking.
 
-1. A launch or customer outcome is represented as a Linear project and deadline.
-2. Product quality is verified manually in production, often across markets, languages, devices, and analytics tools.
-3. A technical decision or fix is requested in Slack or email.
-4. The founder waits, follows up, escalates, or validates the result.
-5. A calendar meeting becomes the next decision boundary.
-6. Legal, billing, and administrative requests compete with product and sales work.
+The normal loop makes no LLM call. A model remains an optional, bounded fallback for a genuinely close tie.
 
-FounderOS should therefore rank decision debt, critical-path risk, follow-up promises, and meeting readiness. Counting unread items is not enough.
+## Implemented closure capabilities
 
-## Closure foundation now shipped
+1. **Commitment ledger**
+   Outgoing Gmail promises, Slack promises, waits, decisions, Linear work, meeting transitions, and operator corrections become persistent obligations. Separate email and Slack threads remain separate commitments unless an explicit project key links them.
 
-- Linear `portfolio` scope observes authorized team risk, retains the founder's own work, and collapses multiple relevant project issues into one outcome-level event.
-- Calendar promotes important meetings into a deterministic `PREP` window 30 minutes before start.
-- Slack distinguishes urgent incidents, access or dependency waits, decision requests, and ordinary mentions.
-- Gmail separates explicit actions and important decisions from FYI billing mail and received artifacts.
-- Every one of these rules is local, configurable, explainable, and covered by regression tests. None invokes an LLM.
+2. **Operational gates and false-ready detection**
+   Release obligations distinguish code, deployment, access, evidence, and validation. Commitment, feedback, meeting, capacity, and decision profiles use their own gates. A newer source regression can reopen a formerly satisfied gate. A source timestamp or lease change alone cannot reopen a manually closed obligation. Open obligations never disappear because an observation ages out, while source evidence does expire and is reevaluated without requiring a new poll result.
 
-## P0, deepen cross-source governance
+3. **Capacity and availability**
+   The engine detects due-date concentration by owner, Calendar and Home Assistant unavailability, and missing handoffs. Operators can record a delegate. A valid delegate satisfies the handoff instead of producing a false `NO BACKUP` alert.
 
-### Decision debt detector
+4. **Burst compaction and priority normalization**
+   Cross-source changes sharing an outcome key collapse into one obligation. Source priority is capped before closure context is added, and large update bursts cannot dominate the device merely because every source marked itself urgent.
 
-Detect explicit requests that remain unresolved, record who owns the next move, count follow-ups, and increase urgency as the waiting time grows. Collapse repeated reminders into one event such as `Engineering decision blocked for 2 days`.
+5. **Meeting transitions**
+   Important meetings enter a deterministic pre-meeting state. The same meeting identity moves to a post-meeting next-action state even when attendees share a customer domain. Routine scheduled meetings do not create obligations. Operators can record the concrete next action and its holder immediately.
 
-### Cross-source critical-path enrichment
+6. **Relationship memory**
+   Customer and partner records retain stage, last meaningful interaction, next decision, open obligations, resume date, and cooling-off date. Follow-ups are deferred during a cooling period unless a blocker or overdue commitment overrides it.
 
-Extend the shipped Linear project rollup with deployment, analytics, customer, and evidence state. The title should continue to state the outcome at risk, not repeat an issue title.
+7. **Customer feedback to roadmap**
+   Slack, Notion, and Sheets feedback is correlated with project and customer keys. Only feedback without an owner or recorded decision remains actionable.
 
-### Meeting readiness mode
+8. **Evidence quorum**
+   Release proof can require categories such as deployment, analytics, market, language, pricing, and device. Each category can also require configured scopes, for example both `market:FR` and `market:ES`. New contradictory source state retracts older evidence from the same observation.
 
-The shipped 30-minute `PREP` state provides the deterministic trigger. Enrich it with a compact brief assembled from the related Linear project, latest Slack decision, and unresolved email promise. After the meeting, suppress it and surface the next recorded commitment.
+## Implemented connector order
 
-### Promise and follow-up radar
+All adapters below are production code, bounded by poll deadlines and disabled until explicitly configured:
 
-Recognize commitments such as `I will send`, `waiting for`, `please confirm`, and `come back by`. Track whether the promised artifact or answer arrived, then distinguish `do now`, `waiting`, and `safe to ignore` deterministically.
+1. Notion, Google Drive, and Google Sheets for decisions, documents, review matrices, and scoped proof.
+2. GitHub and generic deployment status for code, review, and release gates. Only configured deployment workflow names count as deployment proof.
+3. Sentry and PostHog for regressions and analytics evidence.
+4. Shopify for access, catalog, and merchant readiness.
+5. A Gmail-backed Superhuman reminder bridge for an explicitly configured reminder label or query.
+6. Stripe for overdue invoices, actionable disputes, and resolved financial evidence.
+7. Home Assistant for opt-in availability context only.
 
-### Runway mode
+Linear, Calendar, Slack, and Gmail remain the live default sources. Slack now reads bounded thread replies. Gmail reads incoming actions and an explicit outgoing-promise query. The additional connectors stay disabled until their least-privilege credentials, entity mappings, and live preflight are available.
 
-Before travel, leave, or a dense meeting block, rank only work that must be closed, delegated, or explicitly deferred before the cutoff. During leave, suppress routine noise and permit only incidents, contractual deadlines, and launch-critical blockers.
+## Operator surfaces
 
-## P1, make the system useful every day
+The emulator includes a local-only **Obligations** tab backed by the private, atomically published closure snapshot. The CLI provides audited corrections:
 
-### Cross-source entity graph
+```bash
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation list
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation show OBLIGATION_ID
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation action OBLIGATION_ID "Send the validated proposal" --actor Yann
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation delegate OBLIGATION_ID Sam
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation gate OBLIGATION_ID validation satisfied --detail "Accepted by customer"
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation evidence OBLIGATION_ID market --scope FR --detail "Production check passed"
+python3 apps/founderosctl.py --config founderos.autonomous.local.json relationship show partner.example
+python3 apps/founderosctl.py --config founderos.autonomous.local.json relationship set partner.example --stage design_partner --next-decision "Approve rollout" --cooling-off-until 2026-08-20T08:00:00+02:00
+```
 
-Link projects, customers, teammates, contracts, and meetings across systems. One underlying situation should create one event even when it appears in four connectors.
+## Activation gates, not code backlog
 
-### Verification evidence
-
-Attach compact proof to quality-gate events: environments checked, expected result, observed result, owner, and latest deployment. This turns a vague `please test` notification into an auditable release decision.
-
-### Physical acknowledge and snooze
-
-Trusted input can now acknowledge, snooze, and queue an open-source-link action. Permission requests add exact request binding, one-use state, and a short timeout. Emulator SSE remains untrusted development telemetry. A physical hardware adapter that emits the signed loopback contract is still a release gate because the documented display API has no host-readable button stream. External writes remain explicit and separate.
-
-### Daily transition briefs
-
-Offer deterministic modes for start of day, before a meeting, end of day, and return from leave. Each mode should still select one action, with optional secondary context on the back display or companion UI.
-
-### Contact and account memory
-
-Track the current stage, open promise, last meaningful exchange, next decision, and cooling-off date for each customer or partner. This should remain a compact operational memory, not a second CRM.
-
-## P2, expand after the core loop proves useful
-
-- GitHub and deployment signals for regressions that threaten a committed outcome.
-- PostHog and Sentry signals tied to the relevant Linear release gate.
-- Stripe and accounting reminders for invoices, refunds, and month-end evidence.
-- Shopify merchant-readiness checks for required permissions, data completeness, and launch prerequisites.
-- Home Assistant context only for personal availability and focus protection, disabled by default.
-
-## Connector order inferred from the workflow
-
-After Linear, Calendar, Slack, and Gmail, the highest-value additions are:
-
-1. Google Drive and Sheets, for decision registers, proposals, review matrices, and promised deliverables.
-2. Notion, for the latest approved product, architecture, tracking, and operating decisions.
-3. PostHog and Sentry, for production evidence and regressions tied to a release gate.
-4. Shopify, for merchant permissions, catalog freshness, integration readiness, and launch health.
-5. GitHub and deployment status, for code reviews, failed checks, and releases affecting a customer commitment.
-6. Superhuman reminder state, as an enrichment of Gmail follow-up and waiting signals rather than a duplicate inbox.
-7. Stripe and accounting evidence, once product and customer decisions are reliably ranked.
-
-LinkedIn remains useful for relationship follow-up, but it should rank below explicit customer commitments already present in email. Home Assistant should remain last and opt-in because it rarely changes the business decision itself.
+- Map the real Notion databases, Drive folders, Sheets ranges, repositories, deployment endpoint, Sentry projects, and PostHog checks before enabling their connectors.
+- Define required evidence scopes for each real release, since FounderOS cannot safely invent markets, languages, prices, or devices.
+- Use a real Superhuman-synchronized Gmail label or replace its query with the user's actual reminder convention.
+- Keep Shopify, Stripe, and Home Assistant disabled until their narrow tokens and entity allowlists are provisioned.
+- Complete the physical BUSY Bar acceptance window separately. Emulator compatibility cannot prove a particular device and firmware instance.
 
 ## Ranking principles
 
-- Prefer an unresolved decision over an unread notification.
+- Prefer an unresolved obligation over an unread notification.
 - Prefer a customer or production commitment over internal backlog volume.
-- Prefer the next actionable owner transition over repeated copies of the same request.
+- Prefer the next owner transition over repeated copies of the same request.
 - Increase urgency at meeting, travel, contractual, and launch boundaries.
-- Decay stale connector data aggressively.
-- Keep the normal loop deterministic and explain every score component.
-- Use an LLM only to summarize a long thread or resolve a genuinely close tie.
+- Preserve stale-source health explicitly. Never turn unavailable data into `ALL CLEAR`.
+- Keep every score and gate deterministic and auditable.

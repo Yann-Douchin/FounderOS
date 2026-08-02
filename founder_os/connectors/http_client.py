@@ -42,7 +42,8 @@ def request_json(
     retries: int = 2,
     max_response_bytes: int = DEFAULT_MAX_RESPONSE_BYTES,
     deadline_monotonic: float | None = None,
-) -> dict[str, Any]:
+    root: str = "object",
+) -> Any:
     if body is not None and form is not None:
         raise ValueError("request body and form are mutually exclusive")
     _validate_url(url)
@@ -117,8 +118,12 @@ def request_json(
         result = json.loads(raw.decode("utf-8")) if raw else {}
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ConnectorError(f"{method} {safe_url} returned invalid JSON") from exc
-    if not isinstance(result, dict):
+    if root == "object" and not isinstance(result, dict):
         raise ConnectorError(f"{method} {safe_url} returned a non-object JSON response")
+    if root == "array" and not isinstance(result, list):
+        raise ConnectorError(f"{method} {safe_url} returned a non-array JSON response")
+    if root not in {"object", "array", "any"}:
+        raise ValueError("root must be object, array, or any")
     return result
 
 

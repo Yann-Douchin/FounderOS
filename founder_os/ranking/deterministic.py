@@ -22,6 +22,7 @@ KIND_WEIGHTS = {
     "incident": 16.0,
     "permission_request": 30.0,
     "agent_usage": -4.0,
+    "obligation": 12.0,
 }
 
 

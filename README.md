@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/FounderOS-0.1.0-7C5CFC" alt="FounderOS" />
+  <img src="https://img.shields.io/badge/FounderOS-0.2.0-7C5CFC" alt="FounderOS" />
   <img src="https://img.shields.io/badge/API-25.0.0-2B7FFF" alt="API" />
   <img src="https://img.shields.io/badge/web%20UI-Vue%203-42b883" alt="Vue 3" />
   <img src="https://img.shields.io/badge/server-Node%2020.9%2B%20%2B%20Sharp-339933" alt="Server" />
@@ -77,10 +77,13 @@ Or open the emulator's **Apps** tab, choose `founderos`, add `--demo`, and run i
 FounderOS includes:
 
 - deterministic, explainable ranking with persistent deduplication memory;
-- Linear, Slack, Gmail, Google Calendar, LinkedIn bridge, Claude, and ChatGPT/Codex connectors;
+- a persistent, audited obligation ledger with owners, next actors, due dates, gates, evidence, and relationship memory;
+- Linear, Slack, Gmail, Google Calendar, LinkedIn bridge, Claude, ChatGPT/Codex, Notion, Drive, Sheets, GitHub, deployment, Sentry, PostHog, Shopify, Superhuman reminder, Stripe, and Home Assistant connectors;
 - governed Linear portfolio scope with bounded pagination and project-risk rollups;
-- deterministic Gmail action/FYI classification, Slack dependency signals, and Calendar readiness mode;
-- reserved, disabled-by-default entries for GitHub, Stripe, Shopify, and Home Assistant;
+- deterministic Gmail incoming-action and outgoing-promise classification, bounded Slack thread signals, and Calendar before/after meeting transitions;
+- operational false-ready gates, scoped evidence quorum, capacity and handoff checks, burst compaction, and source-priority normalization;
+- a local-only emulator Obligations tab plus audited CLI corrections for state, owner, next action, delegation, gates, evidence, and relationship cooling;
+- additional production connectors disabled by default until their narrow credentials and entity mappings are configured;
 - zero LLM calls in the normal loop;
 - an optional OpenAI Responses API fallback only for close ties;
 - a governed six-state animated icon language for waiting, blocked, decision, meeting, validation, and success;
@@ -99,6 +102,20 @@ npm test
 ```
 
 See [FounderOS architecture](docs/founderos/ARCHITECTURE.md), [configuration](docs/founderos/CONFIGURATION.md), and the [gallery capture checklist](docs/founderos/GALLERY.md).
+
+### Governed obligations
+
+When `closure.enabled` is true, raw connector events are first reconciled into durable obligations. Only governed obligation events and runtime health or permission events enter normal ranking. The emulator's **Obligations** tab reads the private snapshot through a localhost-only endpoint.
+
+```bash
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation list
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation show OBLIGATION_ID
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation action OBLIGATION_ID "Send the validated proposal" --actor Yann
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation delegate OBLIGATION_ID Sam
+python3 apps/founderosctl.py --config founderos.autonomous.local.json relationship show partner.example
+```
+
+See the [founder workflow closure program](docs/founderos/WORKFLOW-ROADMAP.md) for the shipped controls and the remaining deployment-specific activation gates.
 
 ### Autonomous macOS service
 
@@ -210,6 +227,7 @@ curl -s -X POST localhost:8080/api/display/draw -H 'content-type: application/js
 | `GET /api/_animations` | *(emulator)* imported-animation manifest with `fps`/`sections` |
 | `GET /api/_sounds` | *(emulator)* stock-sound manifest `{name: filename}` (used by `sound_test.py`) |
 | `GET /api/_apps` | *(emulator)* list runnable example apps + current app state/output |
+| `GET /api/_founderos/obligations` | *(emulator, localhost only)* current private closure snapshot for the Obligations tab |
 | `POST /api/_apps/start` | *(emulator)* `{name, args?}`, spawn an app (stops any running app first); foldered `apps/local` apps with a `requirements.txt` run in an auto-created per-app `.venv` |
 | `POST /api/_apps/stop` | *(emulator)* stop the running app → `{stopped:bool}` |
 | `GET /api/_scenario` | *(emulator)* scenario state: power override, offline window, steal ownership |

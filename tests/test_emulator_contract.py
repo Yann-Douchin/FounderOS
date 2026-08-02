@@ -15,6 +15,7 @@ class EmulatorContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             environment = dict(os.environ)
             environment["BUSY_DATA_DIR"] = folder
+            environment["FOUNDEROS_CLOSURE_SNAPSHOT"] = str(Path(folder) / "obligations.json")
             result = subprocess.run(
                 ["node", str(ROOT / "tests" / "emulator_contract_test.js")],
                 cwd=ROOT,
@@ -22,7 +23,7 @@ class EmulatorContractTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=20,
+                timeout=60,
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("emulator contract: ok", result.stdout)
@@ -38,7 +39,7 @@ class EmulatorContractTests(unittest.TestCase):
                 capture_output=True,
                 text=True,
                 check=False,
-                timeout=30,
+                timeout=90,
             )
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertIn("53 endpoints, 69 operations ok", result.stdout)

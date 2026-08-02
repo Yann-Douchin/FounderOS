@@ -5,11 +5,15 @@ FounderOS is not a collection of display apps. It is one decision engine with ma
 ## Data flow
 
 ```text
-Linear  Slack  Gmail  Calendar  LinkedIn  Claude  Codex
-   \      |      |       |         |        |      /
+Linear  Slack  Gmail  Calendar  Notion  Drive  Sheets  GitHub  Observability
+   \      |      |       |       |      |      |       |          /
               normalized Event contract
                          |
                       EventBus
+                         |
+        entity correlation + obligation ledger
+                         |
+       gates + evidence + capacity + relationship memory
                          |
             deterministic ranking + memory
                          |
@@ -59,7 +63,15 @@ The minimum valid event is:
 
 The complete model also supports stable IDs, deduplication keys, kind, urgency, impact, timestamps, due and expiry times, confidence, URL, body, and connector metadata. Unknown feed fields are retained inside `metadata`.
 
-Source normalization is deliberately opinionated. Linear portfolio mode retains founder-owned work and allowlisted team risks, then collapses multiple project issues into one outcome event. Slack labels dependency and decision signals. Gmail separates actions from FYI mail and received artifacts. Calendar emits a deterministic readiness state for important meetings. These rules reduce source volume before global ranking and remain fully inspectable.
+Source normalization is deliberately opinionated. Linear portfolio mode retains founder-owned work and allowlisted team risks, then collapses multiple project issues into one outcome event. Slack labels dependency and decision signals, including bounded thread replies. Gmail separates actions from FYI mail and recognizes explicit outgoing promises. Calendar emits deterministic before and after states for important meetings. These rules reduce source volume before closure governance and remain fully inspectable.
+
+## Obligation closure
+
+When enabled, the closure engine converts source observations into durable obligations before ranking. Each obligation contains owner, counterparty, next actor, due date, project, relationship, operational gates, evidence, state, and source observation IDs. SQLite stores the current contract and an append-only state transition audit with private file modes.
+
+Entity correlation is conservative. Explicit project IDs and configured aliases link evidence across sources. Gmail and Slack thread identities preserve separate commitments. Calendar meeting IDs preserve the before and after lifecycle. A source lease or poll timestamp is not treated as a semantic change.
+
+Release profiles can require code, deployment, access, evidence, and validation. Evidence quorum supports both categories and configured scopes such as `market:FR` or `language:es`. Capacity governance detects deadline concentration and explicit unavailability, while relationship memory applies resume and cooling boundaries. The engine emits only active, non-deferred closure events, plus permission, quota, and connector-health system events.
 
 ## Deterministic ranking
 
@@ -124,6 +136,7 @@ Trusted context is published only after the display confirms that exact event. I
 
 ```text
 founder_os/
+  closure/      obligations, gates, evidence, entity graph, SQLite ledger
   connectors/   read-only polling and normalization
   core/         event bus, scheduler, priority engine, runtime
   ranking/      deterministic scorer, persistent memory, optional LLM

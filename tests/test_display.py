@@ -124,6 +124,18 @@ class DisplayTests(unittest.TestCase):
         status = next(element for element in frame if element["id"] == "status")
         self.assertEqual(status["text"], "7M")
 
+    def test_closure_status_label_is_rendered_verbatim(self) -> None:
+        event = Event(
+            source="closure",
+            title="Launch proof",
+            action_required=True,
+            metadata={"status_label": "PROOF", "visual_state": "validation"},
+        )
+        frame = event_layout(RankedEvent(event, 90, {}), NOW)
+        by_id = {element["id"]: element for element in frame}
+        self.assertEqual(by_id["source"]["text"], "CLOSURE")
+        self.assertEqual(by_id["status"]["text"], "PROOF")
+
     def test_permission_request_has_explicit_allow_and_deny_affordances(self) -> None:
         event = Event(
             source="claude",

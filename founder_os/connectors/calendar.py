@@ -17,6 +17,10 @@ DEFAULT_READINESS_KEYWORDS = (
     "launch", "go-live", "client", "customer", "investor", "investisseur",
     "demo", "contrat", "contract", "stratégie", "strategy",
 )
+DEFAULT_AVAILABILITY_KEYWORDS = (
+    "out of office", "ooo", "vacation", "annual leave", "travel", "flight",
+    "absence", "congé", "congés", "vacances", "voyage", "déplacement",
+)
 
 
 class GoogleCalendarConnector(Connector):
@@ -32,6 +36,20 @@ class GoogleCalendarConnector(Connector):
         if not isinstance(values, (list, tuple)):
             raise ConnectorConfigurationError("calendar.readiness_keywords must be a list")
         self.readiness_keywords = tuple(str(value).strip().casefold() for value in values if str(value).strip())
+        availability_values = config.get("availability_keywords", DEFAULT_AVAILABILITY_KEYWORDS)
+        if not isinstance(availability_values, (list, tuple)):
+            raise ConnectorConfigurationError("calendar.availability_keywords must be a list")
+        self.availability_keywords = tuple(str(value).strip().casefold() for value in availability_values if str(value).strip())
+        owner_map = config.get("availability_owner_map", {})
+        if not isinstance(owner_map, Mapping):
+            raise ConnectorConfigurationError("calendar.availability_owner_map must be an object")
+        self.availability_owner_map = {
+            str(key).strip().casefold(): str(value).strip()
+            for key, value in owner_map.items()
+            if str(key).strip() and str(value).strip()
+        }
+        self.lookback_hours = max(0.0, float(config.get("lookback_hours", 2)))
+        self.followup_hours = max(1.0, float(config.get("followup_hours", 24)))
         self.timezone = str(config.get("timezone", "Europe/Madrid"))
         self.request_timeout = max(1.0, float(config.get("request_timeout_seconds", 6)))
         self.http_retries = min(2, max(0, int(config.get("http_retries", 1))))
@@ -45,7 +63,7 @@ class GoogleCalendarConnector(Connector):
         calendar_id = urllib.parse.quote(self.calendar_id, safe="")
         url = f"{self.endpoint.rstrip('/')}/calendars/{calendar_id}/events"
         base_query = {
-            "timeMin": now.isoformat(),
+            "timeMin": (now - timedelta(hours=self.lookback_hours)).isoformat(),
             "timeMax": (now + timedelta(hours=self.horizon_hours)).isoformat(),
             "singleEvents": "true",
             "orderBy": "startTime",
@@ -142,12 +160,34 @@ class GoogleCalendarConnector(Connector):
         self_attendee = next((person for person in attendees if person.get("self")), {})
         needs_action = self_attendee.get("responseStatus") == "needsAction"
         summary = " ".join(str(item.get("summary") or "Meeting").split())
+        description = " ".join(str(item.get("description") or "").split())[:1000]
         readiness_keywords = getattr(self, "readiness_keywords", DEFAULT_READINESS_KEYWORDS)
         readiness_minutes = getattr(self, "readiness_minutes", 30.0)
         readiness = (
             not all_day
             and 0 < minutes <= readiness_minutes
             and any(keyword in summary.casefold() for keyword in readiness_keywords)
+        )
+        important_meeting = any(keyword in summary.casefold() for keyword in readiness_keywords)
+        after_meeting = not all_day and end_at <= now and now - end_at <= timedelta(hours=getattr(self, "followup_hours", 24.0)) and important_meeting
+        availability = all_day and any(
+            keyword in summary.casefold()
+            for keyword in getattr(self, "availability_keywords", DEFAULT_AVAILABILITY_KEYWORDS)
+        )
+        extended = item.get("extendedProperties") or {}
+        explicit_owner = ""
+        if isinstance(extended, Mapping):
+            for values in (extended.get("private"), extended.get("shared")):
+                if isinstance(values, Mapping) and values.get("founderos_owner"):
+                    explicit_owner = str(values["founderos_owner"]).strip()
+                    break
+        availability_owner = explicit_owner or next(
+            (
+                owner
+                for marker, owner in getattr(self, "availability_owner_map", {}).items()
+                if marker in summary.casefold()
+            ),
+            "self",
         )
         if all_day:
             priority, urgency = 58, "normal"
@@ -161,21 +201,27 @@ class GoogleCalendarConnector(Connector):
             priority, urgency = 50, "normal"
         if readiness:
             priority, urgency = max(priority, 80), "high"
-        prefix = "RSVP " if needs_action else "PREP " if readiness else ""
+        prefix = "FOLLOW-UP " if after_meeting else "RSVP " if needs_action else "PREP " if readiness else ""
+        phase = "after" if after_meeting else "before" if readiness else "scheduled"
+        attendee_domains = sorted({
+            str(person.get("email") or "").rsplit("@", 1)[1].casefold()
+            for person in attendees
+            if "@" in str(person.get("email") or "") and not person.get("self")
+        })
         return Event(
-            id=f"calendar:{event_id}:{start_at.isoformat()}",
+            id=f"calendar:{event_id}:{start_at.isoformat()}:{phase}",
             source="calendar",
             kind="calendar_all_day" if all_day else "meeting",
             title=f"{prefix}{summary}",
             body=str(item.get("location") or ""),
             priority=min(100, priority + (6 if needs_action else 0)),
-            action_required=needs_action or readiness or (not all_day and minutes <= 15),
+            action_required=needs_action or readiness or after_meeting or (not all_day and 0 < minutes <= 15),
             urgency=urgency,
             impact="high" if readiness or (not all_day and minutes <= 15) else "medium",
             occurred_at=parse_datetime(item.get("updated"), default=now) or now,
             due_at=None if all_day else start_at,
-            expires_at=end_at,
-            dedupe_key=f"calendar:{event_id}:{start_at.isoformat()}",
+            expires_at=(now + timedelta(hours=self.followup_hours)) if after_meeting else end_at,
+            dedupe_key=f"calendar:{event_id}:{start_at.isoformat()}:{phase}",
             url=str(item.get("htmlLink") or ""),
             metadata={
                 "start_at": start_at.isoformat(),
@@ -183,5 +229,14 @@ class GoogleCalendarConnector(Connector):
                 "location": item.get("location"),
                 "all_day": all_day,
                 "readiness": readiness,
+                "meeting_id": event_id,
+                "meeting_phase": phase,
+                "rsvp_required": needs_action,
+                "obligation_type": "decision" if needs_action and phase == "scheduled" else "meeting",
+                "description": description,
+                "attendee_domains": attendee_domains,
+                "relationship_key": attendee_domains[0] if len(attendee_domains) == 1 else "",
+                "availability": "unavailable" if availability else "available",
+                "person": availability_owner if availability else "",
             },
         )

@@ -15,7 +15,16 @@ from apps import founderosctl
 from founder_os.connectors.base import ConnectorConfigurationError
 from founder_os.connectors.linear_oauth import LinearAccessTokenProvider
 from founder_os.health import HealthReporter
-from founder_os.oauth import OAuthFlowError, _CallbackServer, authorize_google, authorize_linear
+from founder_os.oauth import (
+    GOOGLE_DRIVE_SCOPE,
+    GOOGLE_GMAIL_SCOPE,
+    GOOGLE_SHEETS_SCOPE,
+    OAuthFlowError,
+    _CallbackServer,
+    authorize_google,
+    authorize_linear,
+    google_scopes_for_connectors,
+)
 from founder_os.secrets import MacOSKeychainStore, MemorySecretStore, SecretError, SecretResolver
 from founder_os.service import (
     EMULATOR_LAUNCH_AGENT_LABEL,
@@ -239,6 +248,15 @@ class AutonomousServiceTests(unittest.TestCase):
                         },
                     )
         self.assertEqual(store.values, {})
+
+    def test_google_oauth_scope_set_tracks_only_enabled_workspace_connectors(self) -> None:
+        scopes = google_scopes_for_connectors({
+            "gmail": {"enabled": True},
+            "calendar": {"enabled": False},
+            "drive": {"enabled": True},
+            "sheets": {"enabled": True},
+        })
+        self.assertEqual(scopes, (GOOGLE_GMAIL_SCOPE, GOOGLE_DRIVE_SCOPE, GOOGLE_SHEETS_SCOPE))
 
     def test_google_oauth_rejects_nonallowlisted_credential_accounts_before_authorizing(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -581,6 +599,7 @@ class AutonomousServiceTests(unittest.TestCase):
         environment = payload["EnvironmentVariables"]
         self.assertEqual(environment["BUSY_HOST"], "127.0.0.1")
         self.assertEqual(environment["BUSY_DATA_DIR"], str((root / "state" / "emulator").resolve()))
+        self.assertEqual(environment["FOUNDEROS_CLOSURE_SNAPSHOT"], str((root / "state" / "obligations.json").resolve()))
         self.assertEqual(environment["PORT"], "8080")
         self.assertNotIn("TOKEN", json.dumps(payload))
         self.assertEqual(payload["Umask"], 0o077)
