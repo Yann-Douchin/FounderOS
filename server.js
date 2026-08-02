@@ -740,7 +740,7 @@ const server = http.createServer(async (req, res) => {
     res.write("retry: 2000\n\n"); res.write(`event: state\ndata: ${JSON.stringify(snapshot())}\n\n`);
     clients.add(res); req.on("close", () => clients.delete(res)); return;
   }
-  if (method === "GET" && (p.startsWith("/public/") || p.startsWith("/animations/"))) return serveStatic(res, staticPath(PUBLIC, p.replace(/^\/public\//, "").replace(/^\//, "")));
+  if (method === "GET" && (p.startsWith("/public/") || p.startsWith("/animations/") || p.startsWith("/fonts/"))) return serveStatic(res, staticPath(PUBLIC, p.replace(/^\/public\//, "").replace(/^\//, "")));
   if (method === "GET" && p === "/api/_animations") return send(res, 200, ANIMATIONS);
   if (method === "GET" && p === "/api/_sounds") return send(res, 200, SOUNDS);
   if (method === "GET" && p.startsWith("/assets/")) {

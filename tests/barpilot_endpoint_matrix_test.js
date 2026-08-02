@@ -100,6 +100,8 @@ const call = liveBase ? callLive : callInMemory;
 async function main() {
   assert.strictEqual(contract.barpilot_endpoints.length, 53);
   assert.strictEqual(contract.barpilot_endpoints.reduce((sum, endpoint) => sum + endpoint.methods.length, 0), 69);
+  const interfaceFont = await call("GET", "/fonts/Inter.ttf");
+  assert(interfaceFont.bytes.length > 1000, "the emulator interface font must be served in production");
   if (liveBase) {
     const response = await fetch(liveBase + "/api/_scenario", { headers: apiToken ? { "X-API-Token": apiToken } : {} });
     assert.strictEqual(response.status, 200, "full endpoint mutation pass is allowed only against the FounderOS emulator");
