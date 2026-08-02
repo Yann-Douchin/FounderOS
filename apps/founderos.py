@@ -41,18 +41,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    overrides = {"display": {"host": args.host}} if args.host else {}
-    if args.demo or args.scenario != "mixed":
-        overrides["connectors"] = {
-            name: {"enabled": name == "demo"}
-            for name in (
-                "demo", "linear", "slack", "gmail", "calendar", "linkedin",
-                "claude", "chatgpt_codex", "notion", "drive", "sheets", "github",
-                "deployment", "sentry", "posthog", "shopify", "superhuman", "stripe",
-                "home_assistant",
-            )
-        }
-        overrides["connectors"]["demo"]["scenario"] = args.scenario
+    overrides = runtime_overrides(args)
     recording = RecordingDisplay() if args.dry_run else None
     runtime = FounderOSRuntime.from_path(args.config, overrides=overrides, display=recording)
     if args.once or args.dry_run:
@@ -80,6 +69,13 @@ def main() -> int:
                 if failures:
                     print("unhealthy connectors: " + ", ".join(failures), file=sys.stderr)
                     return 3
+                automation_failures = unhealthy_automations(
+                    state.automation_health,
+                    critical_only=not args.require_healthy,
+                )
+                if automation_failures:
+                    print("unhealthy automations: " + ", ".join(automation_failures), file=sys.stderr)
+                    return 4
             if args.frame_json and recording and recording.frames:
                 print(json.dumps(recording.frames[-1], indent=2, ensure_ascii=False))
             return 0 if not state.display_error else 2
@@ -89,7 +85,37 @@ def main() -> int:
     return 0
 
 
+def runtime_overrides(args: argparse.Namespace) -> dict[str, Any]:
+    overrides: dict[str, Any] = {"display": {"host": args.host}} if args.host else {}
+    if args.demo or args.scenario != "mixed":
+        overrides["connectors"] = {
+            name: {"enabled": name == "demo"}
+            for name in (
+                "demo", "linear", "slack", "gmail", "calendar", "linkedin",
+                "claude", "chatgpt_codex", "notion", "drive", "sheets", "github",
+                "deployment", "sentry", "posthog", "shopify", "superhuman", "stripe",
+                "home_assistant",
+            )
+        }
+        overrides["connectors"]["demo"]["scenario"] = args.scenario
+    if args.demo or args.scenario != "mixed" or args.dry_run:
+        overrides.setdefault("automations", {})["calendar_busy_indicator"] = {"enabled": False}
+    return overrides
+
+
 def unhealthy_connectors(
+    health: Mapping[str, Mapping[str, Any]],
+    *,
+    critical_only: bool,
+) -> list[str]:
+    return sorted(
+        name
+        for name, state in health.items()
+        if state.get("status") != "healthy" and (not critical_only or bool(state.get("critical")))
+    )
+
+
+def unhealthy_automations(
     health: Mapping[str, Mapping[str, Any]],
     *,
     critical_only: bool,

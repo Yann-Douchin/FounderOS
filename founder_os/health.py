@@ -28,6 +28,7 @@ class HealthReporter:
         selected_source: str = "",
         event_count: int,
         connector_health: Mapping[str, Mapping[str, Any]],
+        automation_health: Mapping[str, Mapping[str, Any]] | None = None,
         displayed: bool,
         display_error: str = "",
         now: datetime | None = None,
@@ -61,6 +62,15 @@ class HealthReporter:
                     "error_present": bool(state.get("last_error")),
                 }
                 for name, state in connector_health.items()
+            },
+            "automations": {
+                str(name): {
+                    "status": str(state.get("status", "unknown")),
+                    "critical": bool(state.get("critical", False)),
+                    "last_success_at": state.get("last_success_at"),
+                    "error_present": bool(state.get("last_error")),
+                }
+                for name, state in (automation_health or {}).items()
             },
         }
         _atomic_private_json(self.path, payload)

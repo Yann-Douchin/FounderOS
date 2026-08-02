@@ -138,6 +138,27 @@ class BusyBarDisplay:
     def firmware_status(self) -> dict[str, Any]:
         return self._request("GET", "/api/status/firmware")
 
+    def smart_home_pairing(self) -> dict[str, Any]:
+        """Return content-free Matter fabric and pairing-window state."""
+        return self._request("GET", "/api/smart_home/pairing")
+
+    def smart_home_switch(self) -> dict[str, Any]:
+        """Return the on/off state exposed by BUSY Bar over Matter."""
+        return self._request("GET", "/api/smart_home/switch")
+
+    def set_smart_home_switch(self, state: bool, *, startup: str = "off") -> None:
+        """Publish a BUSY state to the Matter switch without starting a timer."""
+        if not isinstance(state, bool):
+            raise ValueError("smart-home switch state must be boolean")
+        normalized_startup = str(startup).strip().lower()
+        if normalized_startup not in {"on", "off", "toggle", "last"}:
+            raise ValueError("smart-home startup must be on, off, toggle, or last")
+        self._request(
+            "POST",
+            "/api/smart_home/switch",
+            body={"state": state, "startup": normalized_startup},
+        )
+
     def capabilities(self) -> FirmwareCapabilities:
         status = self.firmware_status()
         return capabilities_for(

@@ -46,6 +46,7 @@ class ServiceStatus:
     health_pid: int | None
     display_healthy: bool | None
     connectors_healthy: bool | None
+    automations_healthy: bool | None
     health_age_seconds: float | None
     health_path: Path
 
@@ -382,7 +383,7 @@ def service_status(
 ) -> ServiceStatus:
     health = Path(health_path).expanduser() if health_path else state_root() / "health.json"
     process = launch_agent_status(LAUNCH_AGENT_LABEL)
-    health_state, age, health_pid, display_healthy, connectors_healthy = _health_status(
+    health_state, age, health_pid, display_healthy, connectors_healthy, automations_healthy = _health_status(
         health,
         stale_after_seconds=max(1.0, stale_after_seconds),
     )
@@ -396,6 +397,7 @@ def service_status(
         health_pid=health_pid,
         display_healthy=display_healthy,
         connectors_healthy=connectors_healthy,
+        automations_healthy=automations_healthy,
         health_age_seconds=age,
         health_path=health,
     )
@@ -436,16 +438,16 @@ def launch_agent_status(label: str) -> LaunchAgentStatus:
 def _health_status(
     path: Path,
     stale_after_seconds: float,
-) -> tuple[str, float | None, int | None, bool | None, bool | None]:
+) -> tuple[str, float | None, int | None, bool | None, bool | None, bool | None]:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
-        return "missing", None, None, None, None
+        return "missing", None, None, None, None, None
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return "invalid", None, None, None, None
+        return "invalid", None, None, None, None, None
     generated_at = parse_datetime(payload.get("generated_at")) if isinstance(payload, Mapping) else None
     if generated_at is None:
-        return "invalid", None, None, None, None
+        return "invalid", None, None, None, None, None
     try:
         health_pid = int(payload.get("pid"))
     except (TypeError, ValueError):
@@ -461,15 +463,24 @@ def _health_status(
         )
     else:
         connectors_healthy = None
+    automations = payload.get("automations")
+    if isinstance(automations, Mapping):
+        automations_healthy = all(
+            isinstance(state, Mapping) and state.get("status") == "healthy"
+            for state in automations.values()
+        )
+    else:
+        automations_healthy = None
     age = max(0.0, (utc_now() - generated_at.astimezone(UTC)).total_seconds())
     if age > stale_after_seconds:
-        return "stale", age, health_pid, display_healthy, connectors_healthy
+        return "stale", age, health_pid, display_healthy, connectors_healthy, automations_healthy
     return (
         str(payload.get("status") or "unknown"),
         age,
         health_pid,
         display_healthy,
         connectors_healthy,
+        automations_healthy,
     )
 
 

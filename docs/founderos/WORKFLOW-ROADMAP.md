@@ -34,6 +34,9 @@ The normal loop makes no LLM call. A model remains an optional, bounded fallback
 8. **Evidence quorum**
    Release proof can require categories such as deployment, analytics, market, language, pricing, and device. Each category can also require configured scopes, for example both `market:FR` and `market:ES`. New contradictory source state retracts older evidence from the same observation.
 
+9. **Calendar occupancy indicator**
+   Current opaque Calendar meetings publish one verified on or off state through the BUSY Bar Matter switch. Cancelled, declined, and free events are excluded. Stale Calendar data holds the previous state, an off delay prevents flicker, and the state output never starts a firmware BUSY session that could block the decision display. Apple Home, Google Home, or Home Assistant maps that switch to the physical Hue light.
+
 ## Implemented connector order
 
 All adapters below are production code, bounded by poll deadlines and disabled until explicitly configured:
@@ -70,6 +73,7 @@ python3 apps/founderosctl.py --config founderos.autonomous.local.json relationsh
 - Use a real Superhuman-synchronized Gmail label or replace its query with the user's actual reminder convention.
 - Keep Shopify, Stripe, and Home Assistant disabled until their narrow tokens and entity allowlists are provisioned.
 - Complete the physical BUSY Bar acceptance window separately. Emulator compatibility cannot prove a particular device and firmware instance.
+- Commission the physical BUSY Bar into the selected Matter home, map its switch to `Desk Recording Indicator`, and then enable the Calendar busy indicator with the device LAN host and Keychain token.
 
 ## Ranking principles
 

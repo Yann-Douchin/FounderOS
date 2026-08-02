@@ -118,6 +118,10 @@ def parse_args() -> argparse.Namespace:
     display = commands.add_parser("display", help="Inspect and verify the BUSY Bar display")
     display_commands = display.add_subparsers(dest="display_command", required=True)
     display_commands.add_parser("status", help="Show firmware capabilities and screen readback sizes")
+    display_commands.add_parser(
+        "matter-status",
+        help="Verify the configured Calendar indicator Matter fabric and switch",
+    )
     verify = display_commands.add_parser("verify-accents", help="Verify French glyphs using screen readback")
     verify.add_argument(
         "--raster-fallback",
@@ -535,6 +539,7 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
             "health_pid": status.health_pid,
             "display_healthy": status.display_healthy,
             "connectors_healthy": status.connectors_healthy,
+            "automations_healthy": status.automations_healthy,
             "health_age_seconds": status.health_age_seconds,
             "health_path": str(status.health_path),
             "emulator": {
@@ -550,6 +555,7 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
             and status.health == "running"
             and status.display_healthy is True
             and status.connectors_healthy is True
+            and status.automations_healthy is not False
             and emulator_ready
         ) else 3
     if args.service_command == "uninstall":
@@ -642,7 +648,47 @@ def _configured_display(
     )
 
 
+def _configured_calendar_indicator(config: dict) -> BusyBarDisplay:
+    display_config = config["display"]
+    indicator_config = config["automations"]["calendar_busy_indicator"]
+    token_account = str(
+        indicator_config.get("api_token_env") or display_config.get("api_token_env") or ""
+    ).strip()
+    resolver = build_secret_resolver(config["secrets"])
+    return BusyBarDisplay(
+        str(indicator_config.get("host") or display_config["host"]),
+        application_name="founderos-calendar-busy-check",
+        priority=1,
+        timeout=float(indicator_config["request_timeout_seconds"]),
+        api_token=resolver.get(token_account) if token_account else "",
+        api_semver=str(indicator_config.get("api_semver") or display_config["api_semver"]),
+        text_rendering="native",
+    )
+
+
 def _display_command(args: argparse.Namespace, config: dict) -> int:
+    if args.display_command == "matter-status":
+        display = _configured_calendar_indicator(config)
+        pairing = display.smart_home_pairing()
+        switch = display.smart_home_switch()
+        try:
+            fabric_count = max(0, int(pairing.get("fabric_count", 0)))
+        except (TypeError, ValueError) as exc:
+            raise ServiceError("BUSY Bar returned an invalid Matter fabric count") from exc
+        state = switch.get("state")
+        if not isinstance(state, bool):
+            raise ServiceError("BUSY Bar returned an invalid Matter switch state")
+        latest = pairing.get("latest_pairing_status")
+        latest_value = str(latest.get("value") or "") if isinstance(latest, dict) else ""
+        if latest_value not in {"never_started", "started", "completed_successfully", "failed"}:
+            latest_value = "unknown"
+        print(json.dumps({
+            "commissioned": fabric_count > 0,
+            "fabric_count": fabric_count,
+            "latest_pairing_status": latest_value,
+            "switch_state": state,
+        }, ensure_ascii=False, indent=2))
+        return 0 if fabric_count > 0 else 5
     if args.display_command == "status":
         display = _configured_display(config)
         front = display.screen(0)
@@ -699,6 +745,7 @@ def _wait_for_runtime(config: dict, *, timeout_seconds: float) -> None:
             and latest.health == "running"
             and latest.display_healthy is True
             and latest.connectors_healthy is True
+            and latest.automations_healthy is not False
         ):
             return
         time.sleep(0.25)
@@ -708,6 +755,8 @@ def _wait_for_runtime(config: dict, *, timeout_seconds: float) -> None:
         detail = latest.health
     elif latest.display_healthy is not True:
         detail = "display_unhealthy"
+    elif latest.automations_healthy is False:
+        detail = "automations_unhealthy"
     else:
         detail = "connectors_unhealthy"
     raise ServiceError(f"FounderOS LaunchAgent did not become healthy: {detail}")

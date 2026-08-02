@@ -158,18 +158,30 @@ class GoogleCalendarConnector(Connector):
         if not isinstance(attendees, list) or not all(isinstance(person, Mapping) for person in attendees):
             raise ConnectorError("Calendar event attendees must be a list")
         self_attendee = next((person for person in attendees if person.get("self")), {})
-        needs_action = self_attendee.get("responseStatus") == "needsAction"
+        response_status = str(self_attendee.get("responseStatus") or "").strip()
+        if response_status.casefold() == "declined":
+            return None
+        needs_action = response_status == "needsAction"
+        transparency = str(item.get("transparency") or "opaque").strip().casefold()
+        calendar_busy = transparency != "transparent"
         summary = " ".join(str(item.get("summary") or "Meeting").split())
         description = " ".join(str(item.get("description") or "").split())[:1000]
         readiness_keywords = getattr(self, "readiness_keywords", DEFAULT_READINESS_KEYWORDS)
         readiness_minutes = getattr(self, "readiness_minutes", 30.0)
         readiness = (
             not all_day
+            and calendar_busy
             and 0 < minutes <= readiness_minutes
             and any(keyword in summary.casefold() for keyword in readiness_keywords)
         )
         important_meeting = any(keyword in summary.casefold() for keyword in readiness_keywords)
-        after_meeting = not all_day and end_at <= now and now - end_at <= timedelta(hours=getattr(self, "followup_hours", 24.0)) and important_meeting
+        after_meeting = (
+            not all_day
+            and calendar_busy
+            and end_at <= now
+            and now - end_at <= timedelta(hours=getattr(self, "followup_hours", 24.0))
+            and important_meeting
+        )
         availability = all_day and any(
             keyword in summary.casefold()
             for keyword in getattr(self, "availability_keywords", DEFAULT_AVAILABILITY_KEYWORDS)
@@ -215,7 +227,12 @@ class GoogleCalendarConnector(Connector):
             title=f"{prefix}{summary}",
             body=str(item.get("location") or ""),
             priority=min(100, priority + (6 if needs_action else 0)),
-            action_required=needs_action or readiness or after_meeting or (not all_day and 0 < minutes <= 15),
+            action_required=(
+                needs_action
+                or readiness
+                or after_meeting
+                or (calendar_busy and not all_day and 0 < minutes <= 15)
+            ),
             urgency=urgency,
             impact="high" if readiness or (not all_day and minutes <= 15) else "medium",
             occurred_at=parse_datetime(item.get("updated"), default=now) or now,
@@ -228,6 +245,10 @@ class GoogleCalendarConnector(Connector):
                 "end_at": end_at.isoformat(),
                 "location": item.get("location"),
                 "all_day": all_day,
+                "calendar_busy": calendar_busy,
+                "response_status": response_status,
+                "transparency": transparency,
+                "event_type": str(item.get("eventType") or "default"),
                 "readiness": readiness,
                 "meeting_id": event_id,
                 "meeting_phase": phase,

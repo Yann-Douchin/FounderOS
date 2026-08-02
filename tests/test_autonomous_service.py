@@ -332,6 +332,16 @@ class AutonomousServiceTests(unittest.TestCase):
                         "last_error": "Private customer subject",
                     }
                 },
+                automation_health={
+                    "calendar_busy_indicator": {
+                        "status": "degraded",
+                        "critical": True,
+                        "desired_busy": True,
+                        "applied_busy": False,
+                        "active_event_count": 1,
+                        "last_error": "Private Matter failure detail",
+                    }
+                },
                 displayed=False,
                 display_error="Private display detail",
                 now=NOW,
@@ -344,6 +354,10 @@ class AutonomousServiceTests(unittest.TestCase):
         self.assertNotIn("Private", raw)
         self.assertEqual(payload["selected_source"], "gmail")
         self.assertTrue(payload["connectors"]["gmail"]["error_present"])
+        self.assertTrue(payload["automations"]["calendar_busy_indicator"]["error_present"])
+        self.assertNotIn("desired_busy", payload["automations"]["calendar_busy_indicator"])
+        self.assertNotIn("applied_busy", payload["automations"]["calendar_busy_indicator"])
+        self.assertNotIn("active_event_count", payload["automations"]["calendar_busy_indicator"])
 
     def test_unchanged_frame_remains_display_healthy(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
@@ -676,6 +690,9 @@ class AutonomousServiceTests(unittest.TestCase):
                     "linear": {"status": "healthy", "critical": True},
                     "slack": {"status": "degraded", "critical": True},
                 },
+                "automations": {
+                    "calendar_busy_indicator": {"status": "degraded", "critical": True},
+                },
             }), encoding="utf-8")
             with patch(
                 "founder_os.service.launch_agent_status",
@@ -685,6 +702,7 @@ class AutonomousServiceTests(unittest.TestCase):
         self.assertEqual(status.health, "running")
         self.assertTrue(status.display_healthy)
         self.assertFalse(status.connectors_healthy)
+        self.assertFalse(status.automations_healthy)
 
 
 if __name__ == "__main__":

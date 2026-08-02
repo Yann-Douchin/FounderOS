@@ -15,6 +15,17 @@
       "frame_seconds": 1.0
     }
   },
+  "automations": {
+    "calendar_busy_indicator": {
+      "enabled": false,
+      "mode": "busybar_matter",
+      "host": "",
+      "require_pairing": true,
+      "include_all_day": false,
+      "include_tentative": true,
+      "off_delay_seconds": 15
+    }
+  },
   "interaction": {
     "enabled": false,
     "mode": "signed_http",

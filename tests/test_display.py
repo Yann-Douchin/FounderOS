@@ -307,6 +307,35 @@ class DisplayTests(unittest.TestCase):
         self.assertEqual(capabilities.front_screen_encoding, "bgr888")
         self.assertEqual(capabilities_for("v1.1.1-release", "25.0.0").profile, "busybar-1.1.1-api25")
 
+    def test_matter_switch_methods_use_the_authenticated_api25_contract(self) -> None:
+        calls = []
+        responses = iter((
+            FakeResponse(b'{"fabric_count":1}'),
+            FakeResponse(b'{"state":false,"startup":"off"}'),
+            FakeResponse(),
+        ))
+
+        def capture(request, timeout):
+            calls.append(request)
+            return next(responses)
+
+        display = BusyBarDisplay(
+            "127.0.0.1:8080",
+            api_token="private-token",
+            api_semver="25.0.0",
+        )
+        with patch("founder_os.display.busybar._OPENER.open", side_effect=capture):
+            self.assertEqual(display.smart_home_pairing()["fabric_count"], 1)
+            self.assertFalse(display.smart_home_switch()["state"])
+            display.set_smart_home_switch(True)
+
+        self.assertTrue(calls[0].full_url.endswith("/api/smart_home/pairing"))
+        self.assertTrue(calls[1].full_url.endswith("/api/smart_home/switch"))
+        body = json.loads(calls[2].data.decode("utf-8"))
+        self.assertEqual(body, {"state": True, "startup": "off"})
+        self.assertEqual(calls[2].get_header("X-api-token"), "private-token")
+        self.assertEqual(calls[2].get_header("X-api-sem-ver"), "25.0.0")
+
 
 if __name__ == "__main__":
     unittest.main()

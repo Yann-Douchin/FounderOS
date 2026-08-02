@@ -336,6 +336,79 @@ Calendar includes timed and all-day events. Meetings whose titles match `readine
 
 References: [Gmail scopes](https://developers.google.com/identity/protocols/oauth2/scopes#gmail), [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
 
+## Calendar busy indicator through BUSY Bar Matter
+
+Matter supplies the local device state and transport. A smart-home controller still owns the cross-device automation that maps the BUSY Bar switch to the Hue light. Home Assistant is not required when Apple Home or Google Home already controls both accessories.
+
+The governed path is:
+
+```text
+Google Calendar event
+        |
+deterministic occupancy policy
+        |
+BUSY Bar /api/smart_home/switch
+        |
+Matter controller automation
+        |
+Desk Recording Indicator, red or off
+```
+
+Pair the physical BUSY Bar with the same Matter home that contains the Hue accessory. Then add two controller automations:
+
+1. When the BUSY Bar switch turns on, turn `Desk Recording Indicator` on, set it to red, and select the desired brightness.
+2. When the BUSY Bar switch turns off, turn `Desk Recording Indicator` off.
+
+Apple Home can be that controller. Home Assistant is an alternative when more complex conditions, diagnostics, or cross-platform control are needed. Do not configure either automation to start a BUSY session on the device. Firmware BUSY sessions can block display drawing, while the smart-home switch leaves FounderOS free to render the selected obligation.
+
+Enable the output only after the physical device is commissioned and its LAN API token is stored in the same secret provider as the runtime:
+
+```json
+{
+  "automations": {
+    "calendar_busy_indicator": {
+      "enabled": true,
+      "mode": "busybar_matter",
+      "host": "http://192.168.1.42",
+      "api_token_env": "BUSY_API_TOKEN",
+      "allow_insecure_http": true,
+      "require_pairing": true,
+      "include_all_day": false,
+      "include_tentative": true,
+      "off_delay_seconds": 15,
+      "verify_interval_seconds": 60,
+      "retry_seconds": 5,
+      "retry_max_seconds": 60
+    }
+  }
+}
+```
+
+For a Keychain deployment, `BUSY_API_TOKEN` must also appear in `secrets.accounts`. The explicit `allow_insecure_http` setting acknowledges that the device LAN API uses HTTP on deployments without a local TLS proxy. The API token remains mandatory for any non-loopback production target.
+
+Before enabling the output, verify that the configured physical endpoint reports at least one Matter fabric:
+
+```bash
+python3 apps/founderosctl.py --config founderos.autonomous.local.json secret import-clipboard BUSY_API_TOKEN
+python3 apps/founderosctl.py --config founderos.autonomous.local.json display matter-status
+```
+
+This command reports only commissioning count, pairing status, and switch state. It never opens a pairing window and never prints a QR payload or manual commissioning code.
+
+The occupancy policy is deterministic:
+
+- an event is busy only while its start and end interval contains the current time;
+- cancelled, self-declined, and `transparent` Calendar events are excluded;
+- tentative events count by default, all-day events do not;
+- an unavailable or stale Calendar source holds the last applied state instead of falsely advertising availability;
+- a 15-second off delay absorbs adjacent meetings and short polling transitions;
+- writes are confirmed by reading the switch back, then retried with bounded exponential backoff;
+- automation health is part of the private service heartbeat and the production health gate.
+
+The public examples keep this output disabled because a repository cannot safely invent the physical BUSY Bar address, token, Matter fabric, Hue accessory, or home. Those are deployment facts, not application defaults.
+
+Official references: [BUSY Bar HTTP API reference](https://api.busy.app/busybar/docs), [BUSY Bar smart-home capabilities](https://busy.app/), [BUSY Bar Matter architecture](https://blog.busy.app/new-design-busy-bar/), [Connectivity Standards Alliance certification](https://csa-iot.org/csa_product/busy-bar/).
+
 ## LinkedIn
 
 LinkedIn does not expose a general personal notification stream through open permissions. Many webhook products require an approved use case. FounderOS therefore consumes a user-controlled HTTPS JSON bridge instead of pretending that a universal notifications endpoint exists.

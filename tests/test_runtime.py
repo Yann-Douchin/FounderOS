@@ -18,6 +18,60 @@ NOW = datetime(2026, 8, 1, 10, 0, tzinfo=UTC)
 
 
 class RuntimeTests(unittest.TestCase):
+    def test_calendar_busy_automation_receives_source_events_and_publishes_health(self) -> None:
+        class RecordingAutomation:
+            name = "calendar_busy_indicator"
+
+            def __init__(self) -> None:
+                self.calls = []
+                self.closed = False
+
+            def reconcile(self, events, calendar_health, now, *, wait=False):
+                self.calls.append((list(events), calendar_health, now, wait))
+                return {
+                    "status": "healthy",
+                    "critical": True,
+                    "desired_busy": True,
+                    "applied_busy": True,
+                    "active_event_count": 1,
+                    "last_success_at": now.isoformat(),
+                    "last_error": "",
+                }
+
+            def close(self) -> None:
+                self.closed = True
+
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={"memory": {"path": str(Path(folder) / "memory.json")}}
+            )
+            automation = RecordingAutomation()
+            runtime = FounderOSRuntime(
+                config,
+                display=RecordingDisplay(),
+                busy_indicator=automation,
+            )
+            runtime.bus.publish(
+                Event(
+                    source="calendar",
+                    id="calendar:active",
+                    title="Customer call",
+                    occurred_at=NOW,
+                    expires_at=datetime(2026, 8, 1, 11, 0, tzinfo=UTC),
+                )
+            )
+            try:
+                state = runtime.tick(NOW, force_poll=True)
+            finally:
+                runtime.close()
+
+        self.assertEqual(len(automation.calls), 1)
+        self.assertEqual(automation.calls[0][0][0].id, "calendar:active")
+        self.assertIsNone(automation.calls[0][1])
+        self.assertTrue(automation.calls[0][3])
+        self.assertTrue(state.automation_health[automation.name]["applied_busy"])
+        self.assertTrue(automation.closed)
+
     def test_demo_selects_one_event_and_one_frame(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             config = load_config(

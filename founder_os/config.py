@@ -44,6 +44,25 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "health_path": str(state_root() / "health.json"),
         "heartbeat_seconds": 15.0,
     },
+    "automations": {
+        "calendar_busy_indicator": {
+            "enabled": False,
+            "mode": "busybar_matter",
+            "host": "",
+            "api_token_env": "",
+            "api_semver": "",
+            "request_timeout_seconds": 3.0,
+            "allow_insecure_http": False,
+            "require_pairing": True,
+            "include_all_day": False,
+            "include_tentative": True,
+            "off_delay_seconds": 15.0,
+            "verify_interval_seconds": 60.0,
+            "retry_seconds": 5.0,
+            "retry_max_seconds": 60.0,
+            "force_wait_seconds": 15.0,
+        },
+    },
     "closure": {
         "enabled": False,
         "rank_raw_events": False,
@@ -540,6 +559,40 @@ def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = Non
         raise ConfigError("display.host must be an HTTP or HTTPS endpoint with a host")
     if parsed_display.username or parsed_display.password:
         raise ConfigError("display.host must not contain credentials")
+    automations = config["automations"]
+    if not isinstance(automations, Mapping):
+        raise ConfigError("automations must be an object")
+    calendar_indicator = automations.get("calendar_busy_indicator")
+    if not isinstance(calendar_indicator, Mapping):
+        raise ConfigError("automations.calendar_busy_indicator must be an object")
+    if str(calendar_indicator.get("mode", "")).strip().lower() != "busybar_matter":
+        raise ConfigError("automations.calendar_busy_indicator.mode must be busybar_matter")
+    for field in ("enabled", "allow_insecure_http", "require_pairing", "include_all_day", "include_tentative"):
+        if not isinstance(calendar_indicator.get(field), bool):
+            raise ConfigError(f"automations.calendar_busy_indicator.{field} must be boolean")
+    if float(calendar_indicator.get("request_timeout_seconds", 0)) <= 0:
+        raise ConfigError("automations.calendar_busy_indicator.request_timeout_seconds must be positive")
+    if not 0 <= float(calendar_indicator.get("off_delay_seconds", -1)) <= 300:
+        raise ConfigError("automations.calendar_busy_indicator.off_delay_seconds must be between 0 and 300")
+    if float(calendar_indicator.get("verify_interval_seconds", 0)) < 10:
+        raise ConfigError("automations.calendar_busy_indicator.verify_interval_seconds must be at least 10")
+    if float(calendar_indicator.get("retry_seconds", 0)) <= 0:
+        raise ConfigError("automations.calendar_busy_indicator.retry_seconds must be positive")
+    if float(calendar_indicator.get("retry_max_seconds", 0)) < float(calendar_indicator.get("retry_seconds", 0)):
+        raise ConfigError("automations.calendar_busy_indicator.retry_max_seconds must not be below retry_seconds")
+    if float(calendar_indicator.get("force_wait_seconds", 0)) <= 0:
+        raise ConfigError("automations.calendar_busy_indicator.force_wait_seconds must be positive")
+    indicator_host = str(calendar_indicator.get("host") or display_host)
+    parsed_indicator = urlsplit(indicator_host if "://" in indicator_host else "http://" + indicator_host)
+    if parsed_indicator.scheme not in {"http", "https"} or not parsed_indicator.hostname:
+        raise ConfigError("automations.calendar_busy_indicator.host must be an HTTP or HTTPS endpoint with a host")
+    if parsed_indicator.username or parsed_indicator.password or parsed_indicator.path not in {"", "/"} or parsed_indicator.query or parsed_indicator.fragment:
+        raise ConfigError("automations.calendar_busy_indicator.host must not contain credentials, path, query, or fragment")
+    indicator_semver = str(calendar_indicator.get("api_semver") or display["api_semver"])
+    if not re.fullmatch(r"\d+\.\d+\.\d+", indicator_semver):
+        raise ConfigError("automations.calendar_busy_indicator.api_semver must use semantic version form")
+    if calendar_indicator.get("enabled") and not config["connectors"]["calendar"].get("enabled"):
+        raise ConfigError("calendar_busy_indicator requires the Calendar connector")
     interaction = config["interaction"]
     mode = str(interaction["mode"]).strip().lower()
     if mode not in {"emulator_sse", "signed_http"}:
@@ -810,6 +863,16 @@ def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = Non
             require_account(interaction.get("secret_env"), "signed input secret")
         if not display_is_loopback:
             require_account(display.get("api_token_env"), "BUSY Bar API token")
+        indicator_hostname = parsed_indicator.hostname or ""
+        try:
+            indicator_is_loopback = ipaddress.ip_address(indicator_hostname).is_loopback
+        except ValueError:
+            indicator_is_loopback = indicator_hostname == "localhost"
+        if calendar_indicator.get("enabled") and not indicator_is_loopback:
+            require_account(
+                calendar_indicator.get("api_token_env") or display.get("api_token_env"),
+                "calendar busy indicator BUSY Bar API token",
+            )
     if environment == "production":
         demo = config["connectors"].get("demo")
         if isinstance(demo, Mapping) and demo.get("enabled"):
@@ -857,6 +920,25 @@ def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = Non
             raise ConfigError(
                 "non-loopback production HTTP requires display.allow_insecure_http=true"
             )
+        indicator_hostname = parsed_indicator.hostname or ""
+        try:
+            indicator_is_loopback = ipaddress.ip_address(indicator_hostname).is_loopback
+        except ValueError:
+            indicator_is_loopback = indicator_hostname == "localhost"
+        indicator_token_env = str(
+            calendar_indicator.get("api_token_env") or display.get("api_token_env") or ""
+        ).strip()
+        if calendar_indicator.get("enabled") and not indicator_is_loopback:
+            if not indicator_token_env or not secret_resolver.get(indicator_token_env):
+                raise ConfigError("calendar busy indicator requires a BUSY Bar API token")
+            allow_insecure_indicator = bool(
+                calendar_indicator.get("allow_insecure_http")
+                or (not calendar_indicator.get("host") and display.get("allow_insecure_http"))
+            )
+            if parsed_indicator.scheme != "https" and not allow_insecure_indicator:
+                raise ConfigError(
+                    "non-loopback calendar busy indicator HTTP requires allow_insecure_http=true"
+                )
         if linear_refresh_enabled and not secret_resolver.persistent:
             raise ConfigError("production Linear OAuth refresh requires a persistent secret provider")
 

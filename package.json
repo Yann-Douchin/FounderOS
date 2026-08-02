@@ -1,6 +1,6 @@
 {
   "name": "founder-os-busybar",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "FounderOS deterministic decision engine plus a faithful local BUSY Bar emulator",
   "type": "commonjs",
   "scripts": {
