@@ -57,6 +57,7 @@ def check_required_files() -> None:
         "docs/founderos/PRODUCTION-CLOSURE.md",
         "founderos.production.example.json",
         "founderos.macos.example.json",
+        "apps/founderos_install.zsh",
         "apps/founderosctl.py",
         "deploy/slack-app-manifest.yaml",
         "founder_os/secrets.py",
@@ -115,6 +116,29 @@ def check_autonomous_service() -> None:
     controller = (ROOT / "apps" / "founderosctl.py").read_text(encoding="utf-8")
     if "--skip-preflight" in controller:
         raise CheckFailure("autonomous service installation can bypass the live connector preflight")
+    bootstrap = (ROOT / "apps" / "founderos_install.zsh").read_text(encoding="utf-8")
+    required_bootstrap_controls = (
+        "/usr/bin/git",
+        "archive",
+        "HEAD",
+        "FOUNDEROS_BOOTSTRAPPED=1",
+        "mktemp -d",
+        "web/dist",
+        "founderos.runtime.json",
+    )
+    missing_bootstrap_controls = [
+        control for control in required_bootstrap_controls if control not in bootstrap
+    ]
+    if missing_bootstrap_controls:
+        raise CheckFailure(
+            f"private service bootstrap controls are missing: {missing_bootstrap_controls}"
+        )
+    if "public/animations" in bootstrap:
+        raise CheckFailure("private service bootstrap includes unused stock animations")
+    if "founderos_bootstrap.py" in controller or not (
+        "founderos_install.zsh" in controller and "os.execv" in controller
+    ):
+        raise CheckFailure("service install does not delegate out of the protected checkout")
     server = (ROOT / "server.js").read_text(encoding="utf-8")
     if 'process.env.BUSY_HOST || "127.0.0.1"' not in server or "server.listen(PORT, HOST" not in server:
         raise CheckFailure("the emulator is not loopback-only by default")
@@ -129,6 +153,23 @@ def check_autonomous_service() -> None:
         or "_wait_for_emulator(config" not in controller
     ):
         raise CheckFailure("service installation does not verify its supervised processes")
+    if not all(
+        control in service
+        for control in (
+            "stage_runtime_bundle",
+            "restore_launch_agent",
+            "_bootstrap_launch_agent",
+            "_LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 3",
+        )
+    ) or not all(
+        control in controller
+        for control in (
+            "capture_launch_agent",
+            "restore_launch_agent",
+            "stage_runtime_bundle",
+        )
+    ):
+        raise CheckFailure("service deployment lacks private staging, retry, or rollback controls")
 
 
 def check_private_state() -> None:

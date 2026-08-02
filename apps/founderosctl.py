@@ -22,14 +22,13 @@ def _delegate_protected_service_install() -> None:
     if __name__ != "__main__" or os.environ.get("FOUNDEROS_BOOTSTRAPPED") == "1":
         return
     arguments = sys.argv[1:]
-    try:
-        service_index = arguments.index("service")
-    except ValueError:
+    if not any(
+        arguments[index : index + 2] == ["service", "install"]
+        for index in range(max(0, len(arguments) - 1))
+    ):
         return
-    if service_index + 1 >= len(arguments) or arguments[service_index + 1] != "install":
-        return
-    bootstrap = REPO_ROOT / "apps" / "founderos_bootstrap.py"
-    os.execv(sys.executable, [sys.executable, str(bootstrap), *arguments])
+    bootstrap = REPO_ROOT / "apps" / "founderos_install.zsh"
+    os.execv("/bin/zsh", ["/bin/zsh", str(bootstrap), *arguments])
 
 
 _delegate_protected_service_install()
@@ -250,7 +249,7 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
                 port=_emulator_port(config),
             )
             emulator_changed = True
-            _wait_for_emulator(config, timeout_seconds=12.0)
+            _wait_for_emulator(config, timeout_seconds=45.0)
         else:
             _validate_display(config, wait_seconds=0.0)
         destination = install_launch_agent(
@@ -260,7 +259,7 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
             runtime_state_root=state,
         )
         runtime_changed = True
-        _wait_for_runtime(config, timeout_seconds=60.0)
+        _wait_for_runtime(config, timeout_seconds=90.0)
     except ServiceError as exc:
         snapshots: list[LaunchAgentSnapshot] = []
         if runtime_changed:

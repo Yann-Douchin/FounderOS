@@ -83,16 +83,28 @@ python3 apps/founderos.py \
   --once --dry-run --require-healthy
 
 npm run build
+
+install -d -m 700 "$HOME/Library/Application Support/FounderOS/config"
+install -m 600 \
+  founderos.autonomous.local.json \
+  "$HOME/Library/Application Support/FounderOS/config/founderos.autonomous.json"
+
 python3 apps/founderosctl.py \
-  --config founderos.autonomous.local.json \
+  --config "$HOME/Library/Application Support/FounderOS/config/founderos.autonomous.json" \
   service install
 ```
 
-The installation creates two private user LaunchAgents. `com.founderos.busybar-emulator` binds the emulator to `127.0.0.1` and stores emulator state under the private FounderOS application-state directory, never in the checkout. `com.founderos.runtime` starts FounderOS after login and restarts it after unsuccessful exits. Their plists contain executable paths and non-secret environment settings only. Installation waits for a fresh `running` heartbeat whose PID matches the process reported by launchd, whose display is healthy, and whose connectors have completed healthy polls. An old heartbeat or a live but degraded process cannot hide a failed start.
+The install command delegates packaging to `apps/founderos_install.zsh`. It archives tracked runtime sources from the current committed `HEAD`, adds the already validated `web/dist` build and private configuration, and then creates a content-addressed deployment below `~/Library/Application Support/FounderOS/deployments`. Launchd never executes the source checkout. Generic emulator stock animations are omitted from this package because the FounderOS content icon is rendered with deterministic BUSY Bar rectangle elements.
+
+The installation creates two private user LaunchAgents. `com.founderos.busybar-emulator` binds the emulator to `127.0.0.1` and stores emulator state under the private FounderOS application-state directory, never in the checkout. `com.founderos.runtime` starts FounderOS after login and restarts it after unsuccessful exits. Their plists contain executable paths and non-secret environment settings only. The installer snapshots both prior definitions, retries transient `launchctl bootstrap` failures, and waits for a fresh `running` heartbeat whose PID matches the process reported by launchd, whose display is healthy, and whose connectors have completed healthy polls. If readiness fails, it restores the exact prior plists and loaded states. An old heartbeat or a live but degraded process cannot hide a failed start.
 
 ```bash
-python3 apps/founderosctl.py --config founderos.autonomous.local.json service status
-python3 apps/founderosctl.py --config founderos.autonomous.local.json service uninstall
+python3 apps/founderosctl.py \
+  --config "$HOME/Library/Application Support/FounderOS/config/founderos.autonomous.json" \
+  service status
+python3 apps/founderosctl.py \
+  --config "$HOME/Library/Application Support/FounderOS/config/founderos.autonomous.json" \
+  service uninstall
 ```
 
 The heartbeat is mode `0600` and contains source names, counts, state, and boolean error presence only. It never contains task titles, message bodies, email subjects, remote error text, or credentials. Logs and state live under `~/Library/Application Support/FounderOS` with private directory modes.

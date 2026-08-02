@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from apps import founderos_bootstrap, founderosctl
+from apps import founderosctl
 from founder_os.connectors.base import ConnectorConfigurationError
 from founder_os.connectors.linear_oauth import LinearAccessTokenProvider
 from founder_os.health import HealthReporter
@@ -84,20 +84,6 @@ class FakeCallback:
 
 
 class AutonomousServiceTests(unittest.TestCase):
-    def test_bootstrap_rewrites_only_the_config_path(self) -> None:
-        staged = Path("/private/runtime/founderos.runtime.json")
-        self.assertEqual(
-            founderos_bootstrap._rewrite_config(
-                ["--config", "source.json", "service", "install", "--skip-emulator"],
-                staged,
-            ),
-            ["--config", str(staged), "service", "install", "--skip-emulator"],
-        )
-        self.assertEqual(
-            founderos_bootstrap._rewrite_config(["service", "install"], staged),
-            ["--config", str(staged), "service", "install"],
-        )
-
     def test_keychain_store_never_needs_a_secret_command_argument(self) -> None:
         api = FakeKeychainAPI()
         store = MacOSKeychainStore("com.founderos.test", api=api)
@@ -450,12 +436,13 @@ class AutonomousServiceTests(unittest.TestCase):
             destination = root / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
             destination.parent.mkdir(parents=True)
             destination.write_bytes(b"prior definition")
-            bootstrap_failed = False
+            bootstrap_attempts = 0
 
             def launchctl(*arguments: str, **_: object) -> None:
-                nonlocal bootstrap_failed
-                if arguments[0] == "bootstrap" and not bootstrap_failed:
-                    bootstrap_failed = True
+                nonlocal bootstrap_attempts
+                if arguments[0] == "bootstrap":
+                    bootstrap_attempts += 1
+                if arguments[0] == "bootstrap" and bootstrap_attempts <= 3:
                     raise ServiceError("simulated bootstrap failure")
 
             with patch("founder_os.service.sys.platform", "darwin"), patch.object(
@@ -463,7 +450,9 @@ class AutonomousServiceTests(unittest.TestCase):
             ), patch(
                 "founder_os.service.launch_agent_status",
                 return_value=LaunchAgentStatus(True, 123, "running"),
-            ), patch("founder_os.service._run_launchctl", side_effect=launchctl):
+            ), patch("founder_os.service._run_launchctl", side_effect=launchctl), patch(
+                "founder_os.service.time.sleep"
+            ):
                 with self.assertRaisesRegex(ServiceError, "simulated bootstrap failure"):
                     install_launch_agent(
                         repository=repository,
@@ -472,8 +461,40 @@ class AutonomousServiceTests(unittest.TestCase):
                         runtime_state_root=root / "state",
                     )
             restored = destination.read_bytes()
-        self.assertTrue(bootstrap_failed)
+        self.assertEqual(bootstrap_attempts, 4)
         self.assertEqual(restored, b"prior definition")
+
+    def test_launch_agent_install_retries_transient_bootstrap_failures(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            repository, config = make_runtime_source(root)
+            bootstrap_attempts = 0
+
+            def launchctl(*arguments: str, **_: object) -> None:
+                nonlocal bootstrap_attempts
+                if arguments[0] != "bootstrap":
+                    return
+                bootstrap_attempts += 1
+                if bootstrap_attempts < 3:
+                    raise ServiceError("simulated transient bootstrap failure")
+
+            with patch("founder_os.service.sys.platform", "darwin"), patch.object(
+                Path, "home", return_value=root
+            ), patch(
+                "founder_os.service.launch_agent_status",
+                return_value=LaunchAgentStatus(False, None, "not loaded"),
+            ), patch("founder_os.service._run_launchctl", side_effect=launchctl), patch(
+                "founder_os.service.time.sleep"
+            ):
+                destination = install_launch_agent(
+                    repository=repository,
+                    config_path=config,
+                    python_executable=sys.executable,
+                    runtime_state_root=root / "state",
+                )
+            installed = destination.exists()
+        self.assertEqual(bootstrap_attempts, 3)
+        self.assertTrue(installed)
 
     def test_failed_readiness_rolls_back_runtime_then_emulator(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

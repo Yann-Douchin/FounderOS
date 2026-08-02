@@ -53,6 +53,7 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-OPS-003 | A one-shot run could exit successfully while real connectors were degraded | `--require-healthy` turns source health into an executable preflight, and production one-shot runs fail on unhealthy critical sources | `test_cli` | Operations | Closed |
 | FOS-OPS-004 | Polling stopped when the terminal closed or the Mac restarted | Private user LaunchAgents supervise the loopback emulator and FounderOS, restart unsuccessful exits, and expose a content-free mode `0600` heartbeat whose PID must match launchd before installation succeeds | `test_autonomous_service`, `production_check.py` | Operations | Closed |
 | FOS-OPS-005 | The emulator silently listened on every network interface | The default server and its LaunchAgent bind explicitly to `127.0.0.1`; hardware deployment requires an explicit separate host and token policy | `test_autonomous_service`, `production_check.py` | Security | Closed |
+| FOS-OPS-006 | Launchd could stall while reading a checkout inside a macOS protected folder, and a failed service replacement could leave no working definition | A shell bootstrap archives committed runtime sources into a private content-addressed deployment outside the checkout. LaunchAgent replacement retries transient bootstrap failures, verifies readiness, and transactionally restores both prior definitions and loaded states on failure | `test_autonomous_service`, `production_check.py` | Operations | Closed |
 
 ## Explicit capability boundary
 
@@ -80,7 +81,7 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 5. If device input is enabled, its adapter passes allow, deny, replay, stale-context, acknowledge, snooze, and open tests.
 6. No private snapshot, token, email body, Slack content, or permission payload appears in Git or CI logs.
 
-## Gate status, 2026-08-01
+## Gate status, 2026-08-02
 
 | Gate | Status | Evidence or remaining owner |
 | --- | --- | --- |
@@ -90,6 +91,7 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 | Dedicated GitHub repository and branch protection | Passed | Public repository [Yann-Douchin/FounderOS](https://github.com/Yann-Douchin/FounderOS); protected `main` requires `web`, `python (3.11)`, and `python (3.13)` with strict, linear, pull-request-only changes |
 | Live Linear | Passed | Read-only OAuth refresh completed from the macOS Keychain; portfolio poll reported `healthy` with 9 current events |
 | Live Slack | Passed | Private app installed with `channels:history` and `groups:history` only; six allowlisted conversations passed read-only checks and the connector reported `healthy` |
-| Live Calendar and Gmail | Pending operator presence | Google Cloud requires the deployment owner’s Touch ID before the Desktop OAuth client and offline read-only grant can be created |
+| Live Calendar and Gmail | Passed | Offline read-only Google OAuth credentials are stored in the macOS Keychain; Gmail reported `healthy` with 2 current events and Calendar reported `healthy` with no current event |
+| Autonomous polling supervisor | Passed | Both LaunchAgents are active from a private content-addressed deployment; the fresh heartbeat PID matches launchd, the emulator API reports `25.0.0`, the display is healthy, and all four live connectors report `healthy` |
 | Physical BUSY Bar acceptance | Pending hardware | Device owner must run token, transition, animation, and button-adapter cases |
 | Codex project hook approval | Pending operator UI | Open `/hooks` in Codex and approve the reviewed local definition once |
