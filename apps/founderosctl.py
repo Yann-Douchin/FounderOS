@@ -11,6 +11,8 @@ import shutil
 import subprocess
 import sys
 import time
+from dataclasses import replace
+from datetime import datetime
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -38,9 +40,19 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from founder_os.config import load_config  # noqa: E402
+from founder_os.closure import Evidence, Gate, ObligationLedger, Relationship  # noqa: E402
+from founder_os.closure.ledger import LedgerError  # noqa: E402
 from founder_os.display.busybar import BusyBarDisplay, DisplayError  # noqa: E402
 from founder_os.display.verification import verify_french_glyphs  # noqa: E402
-from founder_os.oauth import OAuthFlowError, authorize_google, authorize_linear  # noqa: E402
+from founder_os.oauth import (  # noqa: E402
+    GOOGLE_DRIVE_SCOPE,
+    GOOGLE_SHEETS_SCOPE,
+    OAuthFlowError,
+    authorize_google,
+    authorize_linear,
+    google_scopes_for_connectors,
+)
+from founder_os.models import parse_datetime, utc_now  # noqa: E402
 from founder_os.paths import state_root  # noqa: E402
 from founder_os.secrets import (  # noqa: E402
     SecretError,
@@ -84,10 +96,12 @@ def parse_args() -> argparse.Namespace:
 
     auth = commands.add_parser("auth", help="Run a least-privilege OAuth flow")
     auth_commands = auth.add_subparsers(dest="auth_command", required=True)
-    google = auth_commands.add_parser("google", help="Authorize read-only Gmail and Calendar")
+    google = auth_commands.add_parser("google", help="Authorize enabled read-only Google connectors")
     google.add_argument("--client-json", required=True, help="Downloaded Google OAuth client JSON")
     google.add_argument("--timeout", type=float, default=240)
     google.add_argument("--manual", action="store_true", help="Print the URL instead of opening a browser")
+    google.add_argument("--include-drive", action="store_true", help="Also request read-only Drive metadata")
+    google.add_argument("--include-sheets", action="store_true", help="Also request read-only Sheets values")
     linear = auth_commands.add_parser("linear", help="Authorize read-only Linear through PKCE")
     linear.add_argument("--client-id", required=True)
     linear.add_argument("--callback-port", type=int, default=8766)
@@ -110,6 +124,60 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Verify the PNG raster fallback instead of the native global font",
     )
+
+    obligation = commands.add_parser("obligation", help="Inspect and correct the commitment ledger")
+    obligation_commands = obligation.add_subparsers(dest="obligation_command", required=True)
+    obligation_list = obligation_commands.add_parser("list", help="List active obligations")
+    obligation_list.add_argument("--all", action="store_true", help="Include closed and cancelled obligations")
+    obligation_list.add_argument("--limit", type=int, default=100)
+    obligation_show = obligation_commands.add_parser("show", help="Show one obligation and its audit")
+    obligation_show.add_argument("id")
+    obligation_state = obligation_commands.add_parser("state", help="Correct an obligation state")
+    obligation_state.add_argument("id")
+    obligation_state.add_argument("state", choices=["open", "waiting", "blocked", "ready", "deferred", "closed", "cancelled"])
+    obligation_state.add_argument("--reason", required=True)
+    obligation_assign = obligation_commands.add_parser("assign", help="Correct the current owner")
+    obligation_assign.add_argument("id")
+    obligation_assign.add_argument("owner")
+    obligation_next = obligation_commands.add_parser("next", help="Correct the next action holder")
+    obligation_next.add_argument("id")
+    obligation_next.add_argument("actor")
+    obligation_delegate = obligation_commands.add_parser("delegate", help="Record or clear a capacity delegate")
+    obligation_delegate.add_argument("id")
+    obligation_delegate.add_argument("actor", help="Delegate name or none")
+    obligation_action = obligation_commands.add_parser("action", help="Record the next concrete action")
+    obligation_action.add_argument("id")
+    obligation_action.add_argument("text")
+    obligation_action.add_argument("--actor", default="")
+    obligation_due = obligation_commands.add_parser("due", help="Correct or clear the due date")
+    obligation_due.add_argument("id")
+    obligation_due.add_argument("value", help="ISO-8601 timestamp or none")
+    obligation_gate = obligation_commands.add_parser("gate", help="Correct one operational gate")
+    obligation_gate.add_argument("id")
+    obligation_gate.add_argument("name")
+    obligation_gate.add_argument("state", choices=["pending", "blocked", "satisfied", "waived"])
+    obligation_gate.add_argument("--owner", default="")
+    obligation_gate.add_argument("--detail", default="")
+    obligation_evidence = obligation_commands.add_parser("evidence", help="Attach operator-verified evidence")
+    obligation_evidence.add_argument("id")
+    obligation_evidence.add_argument("category")
+    obligation_evidence.add_argument("--scope", default="")
+    obligation_evidence.add_argument("--detail", default="")
+    obligation_evidence.add_argument("--expires-at", default="")
+
+    relationship = commands.add_parser("relationship", help="Inspect and correct relationship memory")
+    relationship_commands = relationship.add_subparsers(dest="relationship_command", required=True)
+    relationship_list = relationship_commands.add_parser("list", help="List relationship records")
+    relationship_list.add_argument("--limit", type=int, default=100)
+    relationship_show = relationship_commands.add_parser("show", help="Show one relationship and its audit")
+    relationship_show.add_argument("key")
+    relationship_set = relationship_commands.add_parser("set", help="Set stage and follow-up boundaries")
+    relationship_set.add_argument("key")
+    relationship_set.add_argument("--name")
+    relationship_set.add_argument("--stage")
+    relationship_set.add_argument("--next-decision")
+    relationship_set.add_argument("--resume-after")
+    relationship_set.add_argument("--cooling-off-until")
     return parser.parse_args()
 
 
@@ -126,10 +194,265 @@ def main() -> int:
             return _service_command(args, config, config_path)
         if args.command == "display":
             return _display_command(args, config)
-    except (DisplayError, OAuthFlowError, SecretError, ServiceError, ValueError) as exc:
+        if args.command == "obligation":
+            return _obligation_command(args, config)
+        if args.command == "relationship":
+            return _relationship_command(args, config)
+    except (DisplayError, LedgerError, OAuthFlowError, SecretError, ServiceError, ValueError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
     return 2
+
+
+def _obligation_command(args: argparse.Namespace, config: dict) -> int:
+    ledger = _obligation_ledger(config)
+    try:
+        if args.obligation_command == "list":
+            obligations = ledger.list(active_only=not args.all, limit=args.limit)
+            print(json.dumps([_obligation_summary(value) for value in obligations], ensure_ascii=False, indent=2))
+            return 0
+        obligation = ledger.get(str(args.id))
+        if obligation is None:
+            raise LedgerError(f"unknown obligation: {args.id}")
+        if args.obligation_command == "show":
+            payload = obligation.to_dict()
+            payload["transitions"] = ledger.transitions(obligation.id)
+            payload["audit"] = ledger.audit(obligation.id)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        if args.obligation_command == "state":
+            changed = ledger.transition(obligation.id, args.state, reason=args.reason)
+        elif args.obligation_command == "assign":
+            changed = ledger.correct(obligation.id, {"owner": args.owner}, actor="founderosctl")
+        elif args.obligation_command == "next":
+            changed = ledger.correct(obligation.id, {"next_actor": args.actor}, actor="founderosctl")
+        elif args.obligation_command == "delegate":
+            changed = ledger.correct_metadata(
+                obligation.id,
+                {"delegate": "" if args.actor.casefold() == "none" else args.actor},
+                actor="founderosctl",
+            )
+        elif args.obligation_command == "action":
+            changed = _record_action(ledger, obligation, args)
+        elif args.obligation_command == "due":
+            changed = ledger.correct(
+                obligation.id,
+                {"due_at": None if args.value.casefold() == "none" else _required_datetime(args.value).isoformat()},
+                actor="founderosctl",
+            )
+        elif args.obligation_command == "gate":
+            changed = _correct_gate(ledger, obligation, args)
+        else:
+            changed = _attach_evidence(ledger, obligation, args)
+        print(json.dumps(_obligation_summary(changed), ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        ledger.close()
+
+
+def _relationship_command(args: argparse.Namespace, config: dict) -> int:
+    ledger = _obligation_ledger(config)
+    try:
+        if args.relationship_command == "list":
+            print(json.dumps(
+                [value.to_dict() for value in ledger.relationships(limit=args.limit)],
+                ensure_ascii=False,
+                indent=2,
+            ))
+            return 0
+        current = ledger.relationship(args.key)
+        if args.relationship_command == "show":
+            if current is None:
+                raise LedgerError(f"unknown relationship: {args.key}")
+            payload = current.to_dict()
+            payload["audit"] = ledger.audit(current.key)
+            print(json.dumps(payload, ensure_ascii=False, indent=2))
+            return 0
+        metadata = dict(current.metadata) if current else {}
+        manual_fields = {
+            str(value) for value in metadata.get("manual_fields", [])
+        } if isinstance(metadata.get("manual_fields", []), list) else set()
+        supplied = {
+            name
+            for name in ("name", "stage", "next_decision", "resume_after", "cooling_off_until")
+            if getattr(args, name) is not None
+        }
+        if not supplied:
+            raise ValueError("relationship set requires at least one field")
+        manual_fields.update(supplied)
+        metadata["manual_fields"] = sorted(manual_fields)
+        metadata["manual_correction"] = {
+            "actor": "founderosctl",
+            "at": utc_now().isoformat(),
+            "fields": sorted(supplied),
+        }
+        next_decision = (
+            ""
+            if args.next_decision is not None and args.next_decision.casefold() == "none"
+            else args.next_decision
+            if args.next_decision is not None
+            else current.next_decision if current else ""
+        )
+        relationship = Relationship(
+            key=args.key,
+            name=args.name if args.name is not None else (current.name if current else args.key),
+            stage=args.stage if args.stage is not None else (current.stage if current else "active"),
+            last_interaction_at=current.last_interaction_at if current else None,
+            next_decision=next_decision,
+            resume_after=_optional_datetime_argument(args.resume_after, current.resume_after if current else None),
+            cooling_off_until=_optional_datetime_argument(
+                args.cooling_off_until,
+                current.cooling_off_until if current else None,
+            ),
+            open_obligation_ids=current.open_obligation_ids if current else (),
+            metadata=metadata,
+        )
+        ledger.upsert_relationship(relationship, reason="manual relationship correction")
+        print(json.dumps(relationship.to_dict(), ensure_ascii=False, indent=2))
+        return 0
+    finally:
+        ledger.close()
+
+
+def _correct_gate(
+    ledger: ObligationLedger,
+    obligation,
+    args: argparse.Namespace,
+):
+    timestamp = utc_now()
+    gates = {gate.name: gate for gate in obligation.gates}
+    previous = gates.get(args.name)
+    gates[args.name] = Gate(
+        name=args.name,
+        state=args.state,
+        owner=args.owner or (previous.owner if previous else obligation.owner),
+        detail=args.detail or (previous.detail if previous else "operator correction"),
+        required=previous.required if previous else True,
+        evidence_ids=previous.evidence_ids if previous else (),
+        updated_at=timestamp,
+    )
+    metadata = dict(obligation.metadata)
+    manual = dict(metadata.get("manual_gates") or {})
+    manual[args.name] = {
+        "state": args.state,
+        "owner": args.owner,
+        "detail": args.detail,
+        "required": previous.required if previous else True,
+        "at": timestamp.isoformat(),
+    }
+    metadata["manual_gates"] = manual
+    changed = replace(obligation, gates=tuple(gates.values()), metadata=metadata, updated_at=timestamp)
+    ledger.upsert(changed, reason=f"manual gate correction: {args.name}")
+    return changed
+
+
+def _attach_evidence(
+    ledger: ObligationLedger,
+    obligation,
+    args: argparse.Namespace,
+):
+    timestamp = utc_now()
+    evidence = Evidence(
+        id=f"manual:{args.category}:{int(timestamp.timestamp() * 1000)}",
+        category=args.category,
+        scope=args.scope,
+        source="operator",
+        owner="operator",
+        detail=args.detail,
+        observed_at=timestamp,
+        expires_at=_optional_datetime_argument(args.expires_at, None),
+    )
+    changed = replace(
+        obligation,
+        evidence=(*obligation.evidence, evidence),
+        updated_at=timestamp,
+    )
+    ledger.upsert(changed, reason=f"manual evidence attached: {args.category}")
+    return changed
+
+
+def _record_action(ledger: ObligationLedger, obligation, args: argparse.Namespace):
+    timestamp = utc_now()
+    metadata = dict(obligation.metadata)
+    metadata["next_action"] = " ".join(str(args.text).split())
+    if args.actor:
+        previous = metadata.get("manual_correction")
+        previous_fields = (
+            previous.get("fields", [])
+            if isinstance(previous, dict)
+            else []
+        )
+        metadata["manual_correction"] = {
+            "actor": "founderosctl",
+            "at": timestamp.isoformat(),
+            "fields": sorted({*(str(value) for value in previous_fields), "next_actor"}),
+        }
+    manual = dict(metadata.get("manual_gates") or {})
+    manual["next_move"] = {
+        "state": "satisfied",
+        "owner": args.actor or obligation.next_actor,
+        "detail": metadata["next_action"],
+        "required": True,
+        "at": timestamp.isoformat(),
+    }
+    metadata["manual_gates"] = manual
+    gates = {gate.name: gate for gate in obligation.gates}
+    previous = gates.get("next_move")
+    gates["next_move"] = Gate(
+        name="next_move",
+        state="satisfied",
+        owner=args.actor or (previous.owner if previous else obligation.next_actor),
+        detail=metadata["next_action"],
+        required=previous.required if previous else True,
+        evidence_ids=previous.evidence_ids if previous else (),
+        updated_at=timestamp,
+    )
+    changed = replace(
+        obligation,
+        next_actor=args.actor or obligation.next_actor,
+        gates=tuple(gates.values()),
+        metadata=metadata,
+        updated_at=timestamp,
+    )
+    ledger.upsert(changed, reason="manual next action recorded")
+    return changed
+
+
+def _obligation_summary(obligation) -> dict:
+    return {
+        "id": obligation.id,
+        "state": obligation.state,
+        "priority": obligation.priority,
+        "title": obligation.title,
+        "owner": obligation.owner,
+        "next_actor": obligation.next_actor,
+        "due_at": obligation.due_at.isoformat() if obligation.due_at else None,
+        "missing_gates": [gate.name for gate in obligation.missing_gates],
+        "evidence_count": len(obligation.evidence),
+    }
+
+
+def _obligation_ledger(config: dict) -> ObligationLedger:
+    closure = config["closure"]
+    return ObligationLedger(
+        closure["ledger_path"],
+        audit_max_entries=closure.get("audit_max_entries", 100_000),
+    )
+
+
+def _required_datetime(value: str) -> datetime:
+    parsed = parse_datetime(value)
+    if parsed is None:
+        raise ValueError("an ISO-8601 timestamp is required")
+    return parsed
+
+
+def _optional_datetime_argument(value: str | None, current: datetime | None) -> datetime | None:
+    if not value:
+        return current
+    if value.casefold() == "none":
+        return None
+    return _required_datetime(value)
 
 
 def _secret_command(args: argparse.Namespace, config: dict) -> int:
@@ -168,9 +491,15 @@ def _auth_command(args: argparse.Namespace, config: dict) -> int:
     store = keychain_store_from_config(config["secrets"])
     if args.auth_command == "google":
         options = {"browser_opener": _manual_browser} if args.manual else {}
+        scopes = list(google_scopes_for_connectors(config["connectors"]))
+        if args.include_drive and GOOGLE_DRIVE_SCOPE not in scopes:
+            scopes.append(GOOGLE_DRIVE_SCOPE)
+        if args.include_sheets and GOOGLE_SHEETS_SCOPE not in scopes:
+            scopes.append(GOOGLE_SHEETS_SCOPE)
         result = authorize_google(
             args.client_json,
             store,
+            scopes=scopes,
             timeout_seconds=args.timeout,
             **options,
         )

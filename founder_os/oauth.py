@@ -14,15 +14,22 @@ import webbrowser
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from typing import Any, Callable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from founder_os.connectors.http_client import request_json
 from founder_os.secrets import SecretStore
 
 
-GOOGLE_SCOPES = (
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/calendar.events.readonly",
+GOOGLE_GMAIL_SCOPE = "https://www.googleapis.com/auth/gmail.readonly"
+GOOGLE_CALENDAR_SCOPE = "https://www.googleapis.com/auth/calendar.events.readonly"
+GOOGLE_DRIVE_SCOPE = "https://www.googleapis.com/auth/drive.metadata.readonly"
+GOOGLE_SHEETS_SCOPE = "https://www.googleapis.com/auth/spreadsheets.readonly"
+GOOGLE_SCOPES = (GOOGLE_GMAIL_SCOPE, GOOGLE_CALENDAR_SCOPE)
+SUPPORTED_GOOGLE_SCOPES = (
+    GOOGLE_GMAIL_SCOPE,
+    GOOGLE_CALENDAR_SCOPE,
+    GOOGLE_DRIVE_SCOPE,
+    GOOGLE_SHEETS_SCOPE,
 )
 _MACHINE_ERROR_PATTERN = re.compile(r"[A-Za-z0-9_.-]{1,64}")
 
@@ -42,10 +49,12 @@ def authorize_google(
     client_json: str | Path,
     store: SecretStore,
     *,
+    scopes: Iterable[str] | None = None,
     timeout_seconds: float = 240,
     browser_opener: Callable[[str], Any] = webbrowser.open,
     token_request: Callable[..., dict[str, Any]] = request_json,
 ) -> OAuthResult:
+    requested_scopes = _validated_google_scopes(scopes)
     client = _load_google_client(client_json)
     client_id = str(client["client_id"])
     client_secret = str(client.get("client_secret") or "")
@@ -67,7 +76,7 @@ def authorize_google(
                 "client_id": client_id,
                 "redirect_uri": redirect_uri,
                 "response_type": "code",
-                "scope": " ".join(GOOGLE_SCOPES),
+                "scope": " ".join(requested_scopes),
                 "access_type": "offline",
                 "include_granted_scopes": "true",
                 "prompt": "consent select_account",
@@ -100,7 +109,7 @@ def authorize_google(
             "Google did not return a refresh token; revoke the previous grant and authorize again"
         )
     granted_scope = _scope_text(payload.get("scope"))
-    if granted_scope and not set(GOOGLE_SCOPES).issubset(set(granted_scope.split())):
+    if granted_scope and not set(requested_scopes).issubset(set(granted_scope.split())):
         raise OAuthFlowError("Google did not grant every requested read-only scope")
     store.set("GOOGLE_CLIENT_ID", client_id)
     accounts = ["GOOGLE_CLIENT_ID"]
@@ -112,8 +121,27 @@ def authorize_google(
     return OAuthResult(
         provider="google",
         accounts=tuple(accounts),
-        scope=granted_scope or " ".join(GOOGLE_SCOPES),
+        scope=granted_scope or " ".join(requested_scopes),
     )
+
+
+def google_scopes_for_connectors(connectors: Mapping[str, Any]) -> tuple[str, ...]:
+    """Return the smallest supported read-only scope set for enabled connectors."""
+    requested: set[str] = set()
+
+    def enabled(name: str) -> bool:
+        value = connectors.get(name)
+        return isinstance(value, Mapping) and bool(value.get("enabled"))
+
+    if enabled("gmail") or enabled("superhuman"):
+        requested.add(GOOGLE_GMAIL_SCOPE)
+    if enabled("calendar"):
+        requested.add(GOOGLE_CALENDAR_SCOPE)
+    if enabled("drive"):
+        requested.add(GOOGLE_DRIVE_SCOPE)
+    if enabled("sheets"):
+        requested.add(GOOGLE_SHEETS_SCOPE)
+    return tuple(scope for scope in SUPPORTED_GOOGLE_SCOPES if scope in requested) or GOOGLE_SCOPES
 
 
 def authorize_linear(
@@ -301,6 +329,16 @@ def _scope_text(value: Any) -> str:
     if isinstance(value, list):
         return " ".join(str(item) for item in value)
     return str(value or "")
+
+
+def _validated_google_scopes(scopes: Iterable[str] | None) -> tuple[str, ...]:
+    requested = tuple(dict.fromkeys(str(value).strip() for value in (scopes or GOOGLE_SCOPES) if str(value).strip()))
+    if not requested:
+        raise OAuthFlowError("at least one Google read-only scope is required")
+    unsupported = sorted(set(requested) - set(SUPPORTED_GOOGLE_SCOPES))
+    if unsupported:
+        raise OAuthFlowError("unsupported Google OAuth scopes: " + ", ".join(unsupported))
+    return tuple(scope for scope in SUPPORTED_GOOGLE_SCOPES if scope in requested)
 
 
 def _require_store_accounts(store: SecretStore, accounts: tuple[str, ...]) -> None:

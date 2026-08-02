@@ -51,6 +51,30 @@ class ConnectorNormalizationTests(unittest.TestCase):
         }
         self.assertFalse(LinearConnector._is_blocked(issue))
 
+    def test_linear_negative_labels_do_not_close_operational_gates(self) -> None:
+        connector = LinearConnector.__new__(LinearConnector)
+        connector.timezone = "Europe/Madrid"
+        connector.active_event_ttl = timedelta(hours=48)
+        event = connector._normalize(
+            {
+                "id": "issue-negative",
+                "identifier": "BUSY-NEG",
+                "title": "Launch review",
+                "priority": 2,
+                "updatedAt": NOW.isoformat(),
+                "state": {"name": "Not Ready", "type": "started"},
+                "team": {"key": "BUSY"},
+                "labels": {"nodes": [
+                    {"name": "Not deployed"},
+                    {"name": "Not approved"},
+                ]},
+            },
+            NOW,
+        )
+        self.assertNotIn("code", event.metadata["gate_status"])
+        self.assertNotIn("deployment", event.metadata["gate_status"])
+        self.assertNotIn("validation", event.metadata["gate_status"])
+
     def test_slack_mention(self) -> None:
         connector = SlackConnector.__new__(SlackConnector)
         connector.channel_names = {"C1": "launch"}
@@ -75,6 +99,51 @@ class ConnectorNormalizationTests(unittest.TestCase):
         self.assertIsNotNone(event)
         self.assertEqual(event.kind, "waiting")
         self.assertEqual(event.metadata["signal"], "dependency")
+
+    def test_slack_unblocked_message_is_not_reclassified_as_urgent(self) -> None:
+        connector = SlackConnector.__new__(SlackConnector)
+        connector.channel_names = {"C1": "launch"}
+        connector.mention_markers = []
+        connector.urgent_keywords = ["blocked", "urgent"]
+        connector.risk_keywords = []
+        connector.decision_keywords = []
+        event = connector._normalize(
+            "C1",
+            {"ts": "1785578100.000000", "text": "The deployment is unblocked", "user": "U2"},
+            NOW,
+        )
+        self.assertFalse(event.action_required)
+        self.assertEqual(event.kind, "message")
+
+    def test_outgoing_slack_promise_surfaces_without_a_self_mention(self) -> None:
+        connector = SlackConnector.__new__(SlackConnector)
+        connector.channel_names = {"C1": "launch"}
+        connector.channel_projects = {"C1": "Launch"}
+        connector.channel_relationships = {"C1": "partner.example"}
+        connector.channel_customers = {"C1": "Partenaire Étoile"}
+        connector.user_names = {"UFOUNDER": "Yann"}
+        connector.workspace_url = ""
+        connector.mention_markers = ["<@ufounder>"]
+        connector.urgent_keywords = ["blocked"]
+        connector.risk_keywords = []
+        connector.decision_keywords = []
+        connector.promise_keywords = ["je vous envoie"]
+        connector.self_user_ids = {"UFOUNDER"}
+        event = connector._normalize(
+            "C1",
+            {
+                "ts": "1785664800.000100",
+                "user": "UFOUNDER",
+                "text": "Je vous envoie la preuve demain",
+            },
+            NOW,
+        )
+        self.assertIsNotNone(event)
+        self.assertTrue(event.action_required)
+        self.assertEqual(event.metadata["direction"], "outgoing")
+        self.assertTrue(event.metadata["obligation"])
+        self.assertEqual(event.metadata["relationship_key"], "partner.example")
+        self.assertEqual(event.metadata["customer"], "Partenaire Étoile")
 
     def test_gmail_preserves_accented_sender(self) -> None:
         connector = GmailConnector.__new__(GmailConnector)
@@ -180,6 +249,24 @@ class ConnectorNormalizationTests(unittest.TestCase):
         self.assertIsNone(event.due_at)
         self.assertEqual(event.expires_at, datetime(2026, 8, 1, 22, 0, tzinfo=UTC))
         self.assertTrue(event.metadata["all_day"])
+
+    def test_calendar_availability_uses_an_explicit_owner_mapping(self) -> None:
+        connector = GoogleCalendarConnector.__new__(GoogleCalendarConnector)
+        connector.timezone = "Europe/Madrid"
+        connector.availability_owner_map = {"alex": "Alex"}
+        event = connector._normalize(
+            {
+                "id": "cal-alex-away",
+                "summary": "Alex vacation",
+                "status": "confirmed",
+                "updated": "2026-08-01T09:00:00Z",
+                "start": {"date": "2026-08-01"},
+                "end": {"date": "2026-08-03"},
+            },
+            NOW,
+        )
+        self.assertEqual(event.metadata["availability"], "unavailable")
+        self.assertEqual(event.metadata["person"], "Alex")
 
     def test_jsonl_inbox_waits_for_complete_line(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

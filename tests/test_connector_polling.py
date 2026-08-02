@@ -140,6 +140,36 @@ class DirectConnectorPollingTests(unittest.TestCase):
                 connector.poll(NOW)
         self.assertNotIn("private subject", str(raised.exception))
 
+    def test_slack_poll_reads_actionable_thread_replies(self) -> None:
+        responses = (
+            {
+                "ok": True,
+                "messages": [{"ts": "1785578400.000001", "text": "Launch update", "reply_count": 1, "user": "UOTHER"}],
+                "response_metadata": {"next_cursor": ""},
+            },
+            {
+                "ok": True,
+                "messages": [
+                    {"ts": "1785578400.000001", "text": "Launch update", "user": "UOTHER"},
+                    {"ts": "1785578401.000002", "thread_ts": "1785578400.000001", "text": "I will send the proof", "user": "USELF"},
+                ],
+                "response_metadata": {"next_cursor": ""},
+            },
+        )
+        with patch.dict(os.environ, {"TEST_SLACK_TOKEN": "slack-token"}), patch(
+            "founder_os.connectors.slack.request_json", side_effect=responses
+        ) as request:
+            events = SlackConnector({
+                "token_env": "TEST_SLACK_TOKEN",
+                "channel_ids": ["C123"],
+                "self_user_ids": ["USELF"],
+                "user_names": {"USELF": "Yann"},
+            }).poll(NOW)
+        reply = next(event for event in events if event.metadata.get("thread_ts"))
+        self.assertEqual(reply.metadata["direction"], "outgoing")
+        self.assertEqual(reply.metadata["sender_name"], "Yann")
+        self.assertIn("conversations.replies", request.call_args_list[1].args[0])
+
     def test_linear_remote_graphql_message_is_not_repeated(self) -> None:
         with patch.dict(os.environ, {"TEST_LINEAR_TOKEN": "linear-token"}), patch(
             "founder_os.connectors.linear.request_json",
@@ -209,7 +239,7 @@ class DirectConnectorPollingTests(unittest.TestCase):
             events = connector.poll(NOW)
         self.assertEqual(events[0].title, "PREP Comité stratégie")
         query = request.call_args.kwargs["query"]
-        self.assertEqual(query["timeMin"], NOW.isoformat())
+        self.assertEqual(query["timeMin"], "2026-08-01T08:00:00+00:00")
         self.assertEqual(query["timeMax"], "2026-08-01T18:00:00+00:00")
 
     def test_calendar_follows_bounded_page_tokens(self) -> None:

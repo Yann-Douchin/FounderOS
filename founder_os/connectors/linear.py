@@ -268,6 +268,7 @@ class LinearConnector(Connector):
         if not issue_id or not issue_title:
             raise ConnectorError("Linear issue is missing id or title")
         labels = [str(item.get("name", "")) for item in ((issue.get("labels") or {}).get("nodes") or [])]
+        label_text = " ".join(labels).casefold()
         state_name = str((issue.get("state") or {}).get("name", ""))
         blocker = self._is_blocked(issue)
         linear_priority = self._linear_priority(issue)
@@ -277,6 +278,34 @@ class LinearConnector(Connector):
         title = f"{identifier} {issue_title}".strip()
         assignee = issue.get("assignee") or {}
         project = issue.get("project") or {}
+        gate_status: dict[str, str] = {}
+        state_folded = state_name.casefold()
+        ready_negations = ("not ready", "not done", "not complete", "pas prêt", "non prêt", "pas terminé")
+        if not any(value in state_folded for value in ready_negations) and any(
+            value in state_folded for value in ("ready", "done", "completed", "prêt", "terminé")
+        ):
+            gate_status["code"] = "satisfied"
+        deployment_negations = ("not deployed", "deployment failed", "pas déployé", "non déployé")
+        if not any(value in label_text for value in deployment_negations) and any(
+            value in label_text for value in ("deployed", "production", "live", "déployé")
+        ):
+            gate_status["deployment"] = "satisfied"
+        if any(value in label_text for value in ("access blocked", "missing access", "accès manquant")):
+            gate_status["access"] = "blocked"
+        validation_negations = ("not validated", "not approved", "non validé", "pas validé", "non approuvé")
+        if not any(value in label_text for value in validation_negations) and any(
+            value in label_text for value in ("validated", "approved", "qa passed", "validé", "approuvé")
+        ):
+            gate_status["validation"] = "satisfied"
+        evidence_categories = [
+            category
+            for category, words in {
+                "market": ("market", "marché"), "language": ("language", "langue", "translation"),
+                "pricing": ("pricing", "price", "prix"), "analytics": ("analytics", "tracking"),
+                "device": ("device", "mobile", "desktop", "appareil"),
+            }.items()
+            if any(word in label_text for word in words)
+        ]
         owner_name = str(assignee.get("name") or "Unassigned")
         body = " · ".join(value for value in (state_name, owner_name, str(project.get("name") or "")) if value)
         return Event(
@@ -307,6 +336,8 @@ class LinearConnector(Connector):
                 "project": project.get("name"),
                 "project_url": project.get("url"),
                 "rollup": False,
+                "gate_status": gate_status,
+                "evidence_categories": evidence_categories,
             },
         )
 
@@ -360,5 +391,17 @@ class LinearConnector(Connector):
                 "owners": owners,
                 "issue_ids": [event.id for event in events[:50]],
                 "issues_truncated": len(events) > 50,
+                "issue_summaries": [
+                    {
+                        "id": event.id,
+                        "identifier": event.metadata.get("identifier"),
+                        "title": event.title,
+                        "owner": event.metadata.get("assignee"),
+                        "due_at": event.due_at.isoformat() if event.due_at else None,
+                        "state": event.metadata.get("state"),
+                        "gate_status": event.metadata.get("gate_status"),
+                    }
+                    for event in events[:50]
+                ],
             },
         )

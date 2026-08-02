@@ -336,6 +336,41 @@ function configuredDataDir() {
 }
 const DATA_DIR = configuredDataDir();
 const STATE_FILE = path.join(DATA_DIR, "state.json");
+const CLOSURE_SNAPSHOT = path.resolve(
+  process.env.FOUNDEROS_CLOSURE_SNAPSHOT || path.join(DATA_DIR, "..", "obligations.json")
+);
+const MAX_CLOSURE_SNAPSHOT_BYTES = 8 * 1024 * 1024;
+const MAX_CLOSURE_SNAPSHOT_AGE_SECONDS = Math.max(
+  30,
+  Math.min(86400, Number(process.env.FOUNDEROS_CLOSURE_MAX_AGE_SECONDS || 300) || 300)
+);
+
+function readClosureSnapshot() {
+  try {
+    const stat = fs.statSync(CLOSURE_SNAPSHOT);
+    if (!stat.isFile() || stat.size > MAX_CLOSURE_SNAPSHOT_BYTES) {
+      return { available: false, generated_at: null, obligations: [], relationships: [], error: "snapshot unavailable" };
+    }
+    const payload = JSON.parse(fs.readFileSync(CLOSURE_SNAPSHOT, "utf8"));
+    if (!payload || payload.schema_version !== 1 || !Array.isArray(payload.obligations) || !Array.isArray(payload.relationships)) {
+      return { available: false, generated_at: null, obligations: [], relationships: [], error: "snapshot invalid" };
+    }
+    const generatedAt = typeof payload.generated_at === "string" ? Date.parse(payload.generated_at) : NaN;
+    const ageSeconds = Number.isFinite(generatedAt) ? Math.max(0, (Date.now() - generatedAt) / 1000) : null;
+    const stale = ageSeconds === null || ageSeconds > MAX_CLOSURE_SNAPSHOT_AGE_SECONDS;
+    return {
+      available: true,
+      stale,
+      age_seconds: ageSeconds,
+      generated_at: typeof payload.generated_at === "string" ? payload.generated_at : null,
+      obligations: payload.obligations.slice(0, 5000),
+      relationships: payload.relationships.slice(0, 5000),
+      ...(stale ? { error: "snapshot stale" } : {}),
+    };
+  } catch (_) {
+    return { available: false, generated_at: null, obligations: [], relationships: [], error: "snapshot not initialized" };
+  }
+}
 let _saveTimer = null;
 function saveState() {
   if (_saveTimer) return;
@@ -611,6 +646,16 @@ function send(res, code, obj, headers) {
   res.writeHead(code, Object.assign({ "Content-Type": Buffer.isBuffer(obj) ? "application/octet-stream" : "application/json" }, CORS, headers || {}));
   res.end(body);
 }
+function sendPrivateJson(res, code, obj) {
+  const body = Buffer.from(JSON.stringify(obj));
+  res.writeHead(code, {
+    "Content-Type": "application/json",
+    "Cache-Control": "no-store",
+    "X-Content-Type-Options": "nosniff",
+    "Content-Length": body.length,
+  });
+  res.end(body);
+}
 function sendScreen(res, pixels) {
   const body = Buffer.from(pixels.toString("base64"), "ascii");
   res.writeHead(200, Object.assign({ "Content-Type": "image/bmp", "Content-Length": body.length }, CORS));
@@ -732,7 +777,7 @@ const server = http.createServer(async (req, res) => {
   if (method === "OPTIONS") { send(res, 204, {}); return; }
 
   // static + stream (no auth); UI tab paths (emulator-only) fall back to the SPA
-  if (method === "GET" && (p === "/" || p === "/index.html" || /^\/(network|firmware|settings|draw-tool|apps|scenarios)$/.test(p))) return serveStatic(res, fs.existsSync(path.join(DIST, "index.html")) ? path.join(DIST, "index.html") : path.join(PUBLIC, "index.html"));
+  if (method === "GET" && (p === "/" || p === "/index.html" || /^\/(network|firmware|settings|draw-tool|apps|obligations|scenarios)$/.test(p))) return serveStatic(res, fs.existsSync(path.join(DIST, "index.html")) ? path.join(DIST, "index.html") : path.join(PUBLIC, "index.html"));
   if (method === "GET" && p.startsWith("/static/")) return serveStatic(res, staticPath(DIST, p.replace(/^\//, "")));
   if ((method === "GET" || method === "HEAD") && p === "/favicon.png") return serveStatic(res, path.join(DIST, "favicon.png"));
   if (method === "GET" && p === "/events") {
@@ -757,6 +802,11 @@ const server = http.createServer(async (req, res) => {
   }
   // auth gate (always-allow version/access/transport)
   if (p.startsWith("/api/") && !/\/api\/(version|access|transport)/.test(p) && !authed(req)) return fail(res, 403, "Forbidden");
+
+  if (p === "/api/_founderos/obligations" && method === "GET") {
+    if (!isLocal(req)) return fail(res, 403, "FounderOS obligations are available only on localhost");
+    return sendPrivateJson(res, 200, readClosureSnapshot());
+  }
 
   try {
     /* ---- display ---- */
@@ -1351,6 +1401,7 @@ module.exports = {
   elementExpiries,
   elementStartedAt,
   pruneExpiredElements,
+  readClosureSnapshot,
   scenario,
   server,
   startServer,

@@ -17,6 +17,18 @@ SOURCE_COLORS = {
     "linkedin": "0x0A66C2FF",
     "claude": "0xD97745FF",
     "chatgpt_codex": "0x10A37FFF",
+    "closure": "0xFFB020FF",
+    "notion": "0xF5F5F5FF",
+    "drive": "0x34A853FF",
+    "sheets": "0x0F9D58FF",
+    "github": "0xB5B5B5FF",
+    "deployment": "0x00C7B7FF",
+    "sentry": "0x8A5CF5FF",
+    "posthog": "0xF9BD2BFF",
+    "shopify": "0x95BF47FF",
+    "superhuman": "0x6C63FFFF",
+    "stripe": "0x635BFFFF",
+    "home_assistant": "0x41BDF5FF",
     "founderos": "0xFFB020FF",
     "demo": "0x7C5CFCFF",
 }
@@ -88,7 +100,8 @@ def event_layout(
     accent = CRITICAL if critical else ACTION if event.action_required else SOURCE_COLORS.get(event.source, WHITE)
     source_color = SOURCE_COLORS.get(event.source, accent)
     source_label = event.source.replace("chatgpt_codex", "CODEX").replace("calendar", "CAL").upper()[:8]
-    status = _due_label(event.due_at, now) if event.due_at else "SYNC" if event.kind == "connector_health" else "ACT" if event.action_required else "NOW"
+    explicit_status = str(event.metadata.get("status_label") or "").strip().upper()[:8]
+    status = explicit_status or (_due_label(event.due_at, now) if event.due_at else "SYNC" if event.kind == "connector_health" else "ACT" if event.action_required else "NOW")
     has_icon = icon_frame is not None
     title_x = 16 if has_icon else 6
     title_width = 72 - title_x

@@ -239,6 +239,25 @@ class RuntimeTests(unittest.TestCase):
             finally:
                 runtime.close()
 
+    def test_display_hold_applies_to_persistent_closure_events(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(overrides={"memory": {"path": str(Path(folder) / "memory.json")}})
+            runtime = FounderOSRuntime(config, display=RecordingDisplay())
+            first = RankedEvent(Event(source="closure", id="closure:first", title="First obligation"), 90, {})
+            second = RankedEvent(Event(source="closure", id="closure:second", title="Second obligation"), 91, {})
+            runtime._selected = first
+            runtime._selected_since = 100
+            try:
+                with patch("founder_os.core.runtime.time.monotonic", return_value=101):
+                    selected = runtime._respect_hold(
+                        second,
+                        NOW,
+                        active_event_ids={first.event.id, second.event.id},
+                    )
+                self.assertEqual(selected, first)
+            finally:
+                runtime.close()
+
 
 if __name__ == "__main__":
     unittest.main()

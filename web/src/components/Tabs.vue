@@ -22,6 +22,7 @@ const options = [
   { v: 'settings', label: 'Settings', icon: icons.hexagon },
   { v: 'draw-tool', label: 'Draw tool', icon: icons.palette },
   { v: 'apps', label: 'Apps', icon: icons.play },
+  { v: 'obligations', label: 'Obligations', icon: icons.list },
   { v: 'scenarios', label: 'Scenarios', icon: icons.flask },
 ]
 </script>

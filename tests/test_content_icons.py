@@ -52,6 +52,15 @@ class ContentIconTests(unittest.TestCase):
         self.assertEqual(third_name, first_name)
         self.assertEqual(third_frame, first_frame)
 
+    def test_closure_engine_can_select_a_gate_specific_icon(self) -> None:
+        event = Event(
+            source="closure",
+            title="Launch | 2 PROOFS MISSING",
+            kind="blocker",
+            metadata={"visual_state": "validation"},
+        )
+        self.assertEqual(select_content_icon(event), "validation")
+
 
 if __name__ == "__main__":
     unittest.main()

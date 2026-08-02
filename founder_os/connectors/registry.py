@@ -7,13 +7,19 @@ from typing import Any, Mapping
 from founder_os.connectors.agents import AgentBridgeConnector
 from founder_os.connectors.base import Connector, ConnectorConfigurationError
 from founder_os.connectors.calendar import GoogleCalendarConnector
+from founder_os.connectors.commerce import ShopifyConnector, StripeConnector
 from founder_os.connectors.demo import DemoConnector
+from founder_os.connectors.drive import GoogleDriveConnector, GoogleSheetsConnector
 from founder_os.connectors.feed import ChatGPTCodexConnector, ClaudeConnector, LinkedInConnector
 from founder_os.connectors.gmail import GmailConnector
+from founder_os.connectors.github import DeploymentConnector, GitHubConnector
+from founder_os.connectors.home_assistant import HomeAssistantConnector
 from founder_os.connectors.linear import LinearConnector
-from founder_os.connectors.planned import PlannedConnector
+from founder_os.connectors.notion import NotionConnector
+from founder_os.connectors.observability import PostHogConnector, SentryConnector
 from founder_os.connectors.snapshot import JsonSnapshotConnector
 from founder_os.connectors.slack import SlackConnector
+from founder_os.connectors.superhuman import SuperhumanReminderConnector
 from founder_os.secrets import SecretResolver
 
 
@@ -26,8 +32,18 @@ ACTIVE_CONNECTORS = {
     "linkedin": LinkedInConnector,
     "claude": ClaudeConnector,
     "chatgpt_codex": ChatGPTCodexConnector,
+    "notion": NotionConnector,
+    "drive": GoogleDriveConnector,
+    "sheets": GoogleSheetsConnector,
+    "github": GitHubConnector,
+    "deployment": DeploymentConnector,
+    "sentry": SentryConnector,
+    "posthog": PostHogConnector,
+    "shopify": ShopifyConnector,
+    "superhuman": SuperhumanReminderConnector,
+    "stripe": StripeConnector,
+    "home_assistant": HomeAssistantConnector,
 }
-PLANNED_CONNECTORS = {"github", "stripe", "shopify", "home_assistant"}
 
 
 def build_connectors(
@@ -42,9 +58,6 @@ def build_connectors(
         runtime_config = dict(connector_config)
         if secrets is not None:
             runtime_config["_secret_resolver"] = secrets
-        if name in PLANNED_CONNECTORS:
-            result.append(PlannedConnector(runtime_config, name=name))
-            continue
         mode = str(runtime_config.get("mode", "api")).strip().lower()
         if mode == "snapshot":
             if name not in ACTIVE_CONNECTORS:

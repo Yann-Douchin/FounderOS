@@ -102,6 +102,15 @@ async function main() {
   assert.strictEqual(contract.barpilot_endpoints.reduce((sum, endpoint) => sum + endpoint.methods.length, 0), 69);
   const interfaceFont = await call("GET", "/fonts/Inter.ttf");
   assert(interfaceFont.bytes.length > 1000, "the emulator interface font must be served in production");
+  if (!liveBase) {
+    const obligations = await call("GET", "/api/_founderos/obligations");
+    assert.strictEqual(
+      obligations.headers["Access-Control-Allow-Origin"],
+      undefined,
+      "the private obligation snapshot must not be readable cross-origin"
+    );
+    assert.strictEqual(obligations.headers["Cache-Control"], "no-store");
+  }
   if (liveBase) {
     const response = await fetch(liveBase + "/api/_scenario", { headers: apiToken ? { "X-API-Token": apiToken } : {} });
     assert.strictEqual(response.status, 200, "full endpoint mutation pass is allowed only against the FounderOS emulator");

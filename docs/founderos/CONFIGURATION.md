@@ -48,7 +48,7 @@ FounderOS stores the client ID and refresh token in the Keychain. Linear refresh
 
 ### Google OAuth
 
-In a Google Cloud project owned by the deployment organization, enable the Gmail API and Google Calendar API. Configure the OAuth consent screen, then create and download a Desktop app OAuth client. Web application clients are rejected because the loopback port is intentionally ephemeral.
+In a Google Cloud project owned by the deployment organization, enable the APIs used by the configured Google connectors. Gmail and Calendar are the live default. Enable Drive or Sheets only before activating those optional connectors. Configure the OAuth consent screen, then create and download a Desktop app OAuth client. Web application clients are rejected because the loopback port is intentionally ephemeral.
 
 ```bash
 python3 apps/founderosctl.py \
@@ -57,7 +57,7 @@ python3 apps/founderosctl.py \
   --client-json ~/Downloads/client_secret.json
 ```
 
-The authorization request contains only `gmail.readonly` and `calendar.events.readonly`, requests offline access, uses PKCE, validates a random state value, accepts the callback only on `127.0.0.1`, and rejects a partial scope grant before storing credentials.
+The authorization request computes the smallest supported read-only scope set from enabled connectors, requests offline access, uses PKCE, validates a random state value, accepts the callback only on `127.0.0.1`, and rejects a partial scope grant before storing credentials. Use `--include-drive` or `--include-sheets` only when provisioning those connectors before enabling them.
 
 ### Slack app
 
@@ -213,6 +213,54 @@ python3 apps/founderos.py --demo --scenario slack
 python3 apps/founderos.py --demo --scenario clear
 ```
 
+## Obligation closure engine
+
+Production enables the deterministic closure layer. Connector events are observations. The persisted obligation is the governed unit sent to ranking.
+
+```json
+{
+  "closure": {
+    "enabled": true,
+    "rank_raw_events": false,
+    "default_owner": "Yann",
+    "self_aliases": ["self", "me", "Yann"],
+    "source_priority_cap": 72,
+    "burst_window_minutes": 240,
+    "burst_threshold": 4,
+    "audit_max_entries": 100000,
+    "capacity": {
+      "due_day_threshold": 5,
+      "require_handoff_when_unavailable": true
+    },
+    "proof_profiles": {
+      "release": {
+        "required_categories": ["deployment", "analytics", "market", "language", "pricing", "device"],
+        "minimum_categories": 6,
+        "required_scopes": {
+          "market": ["FR", "ES"],
+          "language": ["fr", "es"]
+        }
+      }
+    }
+  }
+}
+```
+
+The mode `0600` SQLite ledger and atomic JSON snapshot live below `FOUNDEROS_STATE_DIR`. The snapshot contains structured obligations and relationship memory, not connector credentials. The loopback emulator exposes it only through `GET /api/_founderos/obligations` for the **Obligations** tab.
+
+Use the audited operator commands to correct source inference, capture the next meeting action, attach scoped evidence, record a delegate, or set a relationship cooling period:
+
+```bash
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation list
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation action OBLIGATION_ID "Send the validated proposal" --actor Yann
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation delegate OBLIGATION_ID Sam
+python3 apps/founderosctl.py --config founderos.autonomous.local.json obligation evidence OBLIGATION_ID market --scope FR
+python3 apps/founderosctl.py --config founderos.autonomous.local.json relationship show partner.example
+python3 apps/founderosctl.py --config founderos.autonomous.local.json relationship set partner.example --stage design_partner --next-decision "Approve rollout" --cooling-off-until 2026-08-20T08:00:00+02:00
+```
+
+Manual close and cancellation remain stable across polling timestamp changes. A new event or a semantic source change reopens the obligation. `stale_after_days` limits the initial import of old observations, but never expires an open obligation already accepted into the ledger. New contradictory state from the same source observation retracts its older evidence. Source evidence expires deterministically even if the source event disappears, while operator evidence can remain valid without an expiry. The audit retains the newest `audit_max_entries` rows, with a validated range of 1,000 to 10,000,000, so unattended polling cannot grow it without bound. Relationship fields set through the CLI remain pinned across later source polls. Pass `--next-decision none` to clear a pinned decision.
+
 ## Linear
 
 Set `LINEAR_API_KEY` and enable the connector. Personal API keys are sent as the raw `Authorization` value required by Linear. For an OAuth access token, set `auth_scheme` to `bearer`.
@@ -254,13 +302,18 @@ Set `SLACK_BOT_TOKEN`, list the conversation IDs to watch, and grant the corresp
     "token_env": "SLACK_BOT_TOKEN",
     "channel_ids": ["C0123456789"],
     "channel_names": {"C0123456789": "launch"},
+    "channel_projects": {"C0123456789": "Launch"},
+    "channel_relationships": {"C0123456789": "partner.example"},
+    "channel_customers": {"C0123456789": "Design Partner"},
     "mention_markers": ["<@U012FOUNDER>"],
+    "self_user_ids": ["U012FOUNDER"],
+    "max_threads_per_poll": 10,
     "poll_interval_seconds": 60
   }
 }
 ```
 
-`mention_markers` limits ordinary messages to explicit founder mentions. Urgent incidents, dependency phrases such as `waiting for` or `need access`, and explicit decision requests still pass. These signal dictionaries are configurable through `urgent_keywords`, `risk_keywords`, and `decision_keywords`. Every surfaced message records the matched signal, and pagination plus the total poll deadline are bounded. The 60-second default respects the restrictive rate tier documented for some newly distributed Slack apps.
+`mention_markers` limits ordinary messages to explicit founder mentions. Urgent incidents, dependency phrases such as `waiting for` or `need access`, explicit decision requests, and outgoing founder promises still pass. FounderOS reads a bounded number of reply threads through `conversations.replies`, so a commitment made inside a recently observed thread is not lost. `self_user_ids` identifies outgoing founder commitments. `channel_projects`, `channel_relationships`, and `channel_customers` are explicit because a channel name is not automatically a project or customer identity. These signal dictionaries are configurable through `urgent_keywords`, `risk_keywords`, `decision_keywords`, and `promise_keywords`. Pagination and the total poll deadline are bounded.
 
 Reference: [Slack `conversations.history`](https://docs.slack.dev/reference/methods/conversations.history/).
 
@@ -272,10 +325,14 @@ Recommended least-privilege scopes:
 
 - Gmail: `https://www.googleapis.com/auth/gmail.readonly`
 - Calendar: `https://www.googleapis.com/auth/calendar.events.readonly`
+- Drive, only when enabled: `https://www.googleapis.com/auth/drive.metadata.readonly`
+- Sheets, only when enabled: `https://www.googleapis.com/auth/spreadsheets.readonly`
 
-Gmail message metadata is fetched concurrently with bounded workers and a total poll deadline. Unread mail is not automatically actionable. A deterministic classifier separates explicit requests, important messages, received attachments, and informational mail such as invoices, receipts, refunds, and newsletters. Explicit phrases such as `aucune action requise` override embedded action words. VIP entries match an exact address or an exact domain, never an address substring. Tune the classifier with `vip_senders`, `action_keywords`, `non_action_keywords`, `fyi_keywords`, and `urgent_keywords`.
+The Google authorization command derives the smallest scope set from enabled connectors. `--include-drive` and `--include-sheets` are explicit opt-ins when provisioning those connectors before activation.
 
-Calendar includes timed and all-day events. Meetings whose titles match `readiness_keywords` become a `PREP` action during the configurable 30-minute readiness window. This gives launch, customer, investor, contract, and strategy boundaries precedence without calling a model. Calendar follows page tokens up to `max_events`, `max_pages`, and one total poll deadline. Both Google connectors invalidate and refresh once after an HTTP `401` when refresh credentials are available.
+Gmail message metadata is fetched concurrently with bounded workers and a total poll deadline. Unread mail is not automatically actionable. A deterministic classifier separates explicit requests, important messages, received attachments, and informational mail such as invoices, receipts, refunds, and newsletters. Explicit phrases such as `aucune action requise` override embedded action words. VIP entries match an exact address or an exact domain, never an address substring. Production should configure two bounded queries, one incoming query and one explicit outgoing-promise query. Tune the classifier with `vip_senders`, `action_keywords`, `promise_keywords`, `non_action_keywords`, `fyi_keywords`, and `urgent_keywords`.
+
+Calendar includes timed and all-day events. Meetings whose titles match `readiness_keywords` become a `PREP` action during the configurable 30-minute readiness window. Important completed meetings become a governed follow-up transition. All-day absences can map an explicit title marker to a person through `availability_owner_map`, or use a `founderos_owner` extended property. This gives launch, customer, investor, contract, strategy, and handoff boundaries precedence without calling a model. Calendar follows page tokens up to `max_events`, `max_pages`, and one total poll deadline. Google connectors invalidate and refresh once after an HTTP `401` when refresh credentials are available.
 
 References: [Gmail scopes](https://developers.google.com/identity/protocols/oauth2/scopes#gmail), [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
 
@@ -402,6 +459,22 @@ The fallback uses the Responses API with Structured Outputs and `store: false`.
 
 References: [Responses API quickstart](https://platform.openai.com/docs/quickstart), [Structured Outputs in Responses](https://platform.openai.com/docs/api-reference/responses-streaming/response/output_item/added).
 
-## Planned connectors
+## Additional closure connectors
 
-GitHub, Stripe, Shopify, and Home Assistant are present in the configuration schema with `status: "planned"` and `enabled: false`. Enabling one in V1 fails fast with a configuration error so an unfinished adapter can never silently produce misleading events.
+The following adapters are implemented and disabled by default. Enabling one requires its explicit allowlists and least-privilege credential in the configured secret provider.
+
+| Connector | Closure value | Required configuration |
+| --- | --- | --- |
+| Notion | Decisions and approved document evidence | Integration token plus a database allowlist, or an explicit all-shared-pages opt-in |
+| Drive | Document metadata and custom scoped evidence properties | Google read-only metadata scope plus a folder allowlist, or an explicit all-files opt-in |
+| Sheets | Feedback registers and proof matrices | Google read-only values scope, spreadsheet IDs, ranges, and column mappings |
+| GitHub | Reviews, code checks, and configured deployment workflows | Fine-grained token, repository allowlist, optional project map and deployment workflow names |
+| Deployment | Deployment gate state from an operator-owned endpoint | HTTPS endpoint and optional bearer token |
+| Sentry | Unresolved production regressions | Read-only token, organization, and project allowlist |
+| PostHog | Configured analytics thresholds and passing evidence | Personal read token, project ID, bounded query objects, value paths, and comparators |
+| Shopify | Merchant access and catalog readiness | Narrow Admin API token, exact shop host, and required scope list |
+| Superhuman | Reminder obligations through a real Gmail label or query | Google Gmail read scope and the user's actual reminder query |
+| Stripe | Overdue invoices, actionable disputes, and resolved evidence | Restricted read key |
+| Home Assistant | Opt-in availability and handoff context | Loopback or HTTPS endpoint, long-lived token, and entity allowlist |
+
+Successful generic CI does not count as deployment proof. GitHub accepts deployment evidence only when the case-insensitive workflow name exactly matches a configured `deployment_workflows` entry. PostHog and Sheets checks are declarative and bounded. FounderOS never invents a market, language, device, repository, customer, or Home Assistant entity.
