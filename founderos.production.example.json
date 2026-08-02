@@ -10,7 +10,9 @@
     "device_priority": 90,
     "api_token_env": "BUSY_API_TOKEN",
     "api_semver": "25.0.0",
-    "validate_on_start": true
+    "validate_on_start": true,
+    "lease_seconds": 300,
+    "text_rendering": "auto"
   },
   "interaction": {
     "enabled": true,

@@ -82,6 +82,8 @@ python3 apps/founderos.py \
   --config founderos.autonomous.local.json \
   --once --dry-run --require-healthy
 
+npm ci
+npm ci --prefix web
 npm run build
 
 install -d -m 700 "$HOME/Library/Application Support/FounderOS/config"
@@ -94,7 +96,7 @@ python3 apps/founderosctl.py \
   service install
 ```
 
-The install command delegates packaging to `apps/founderos_install.zsh`. It archives tracked runtime sources from the current committed `HEAD`, adds the already validated `web/dist` build and private configuration, and then creates a content-addressed deployment below `~/Library/Application Support/FounderOS/deployments`. Launchd never executes the source checkout. Generic emulator stock animations are omitted from this package because the FounderOS content icon is rendered with deterministic BUSY Bar rectangle elements.
+The emulator requires Node.js 20.9.0 or newer. The install command verifies that version, then delegates packaging to `apps/founderos_install.zsh`. It archives tracked runtime sources from the current committed `HEAD`, adds the already validated `web/dist` build, the locked Sharp image decoder, stock animation assets needed by `/api/screen`, and the private configuration, then creates a content-addressed deployment below `~/Library/Application Support/FounderOS/deployments`. Launchd never executes the source checkout.
 
 The installation creates two private user LaunchAgents. `com.founderos.busybar-emulator` binds the emulator to `127.0.0.1` and stores emulator state under the private FounderOS application-state directory, never in the checkout. `com.founderos.runtime` starts FounderOS after login and restarts it after unsuccessful exits. Their plists contain executable paths and non-secret environment settings only. The installer snapshots both prior definitions, retries transient `launchctl bootstrap` failures, and waits for a fresh `running` heartbeat whose PID matches the process reported by launchd, whose display is healthy, and whose connectors have completed healthy polls. If readiness fails, it restores the exact prior plists and loaded states. An old heartbeat or a live but degraded process cannot hide a failed start.
 
@@ -111,9 +113,34 @@ The heartbeat is mode `0600` and contains source names, counts, state, and boole
 
 When using physical hardware, set its host in the local configuration and pass `service install --skip-emulator`. A non-loopback production display requires a Keychain-allowlisted BUSY Bar API token. Plain HTTP also requires the explicit `display.allow_insecure_http` risk acceptance.
 
+## Display lifecycle and firmware compatibility
+
+The display adapter uses element leases and differential updates so a one-pixel icon change never resends scrolling task text. A normal refresh sends one non-scrolling probe element. A complete frame is sent after a decision change, a transport or priority failure, a structural layout transition, or lease renewal.
+
+```json
+{
+  "display": {
+    "lease_seconds": 300,
+    "lease_refresh_ratio": 0.8,
+    "conflict_retry_seconds": 2,
+    "conflict_retry_max_seconds": 30,
+    "clear_on_shutdown": true,
+    "text_rendering": "auto"
+  }
+}
+```
+
+- `lease_seconds` bounds how long a frame can remain after an ungraceful process exit.
+- `lease_refresh_ratio` renews the complete frame after the selected fraction of its lease.
+- conflict retries use bounded exponential delay and force a complete recovery frame once drawing is possible again.
+- graceful shutdown clears only the configured FounderOS application namespace.
+- `text_rendering` defaults to `auto`. At startup, FounderOS reads the firmware identity and compares `Échéance`, `décision`, `ingénierie`, `œ`, and `’` pixel by pixel through `/api/screen`. It selects `native` only after an exact successful readback. Otherwise it selects `raster_non_ascii`, verifies that path, and stores the result in a private mode `0600` cache keyed by host and firmware version. The fallback uploads Unicode text as alternating PNG assets and scrolls it through differential image updates.
+
+Run the firmware, screen, and accent checks described in [BarPilot compatibility](BARPILOT-COMPATIBILITY.md) before closing physical-device acceptance.
+
 ## Content-aware animated icon
 
-FounderOS reserves an 8 by 8 pixel area beside the selected task. The icon is chosen deterministically from the event's urgency, kind, title, body, and source. Alerts, calendar events, mail, chat, code, trends, decisions, tasks, and focus each have a two-frame pixel animation. This selection never invokes an LLM.
+FounderOS reserves an 8 by 8 pixel area beside the selected task. The icon is chosen deterministically from the event's urgency, kind, title, body, and source. The governed visual vocabulary contains exactly six two-frame states: waiting, blocked, decision, meeting, validation, and success. This selection never invokes an LLM.
 
 ```json
 {

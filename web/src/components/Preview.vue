@@ -7,8 +7,8 @@
     <!-- back OLED is rendered but hidden (the front illustration shows only the face) -->
     <canvas class="oled" ref="oled" width="160" height="80" style="display:none" aria-hidden="true"></canvas>
     <div class="capture-row">
-      <button class="cap-btn" title="Save preview.png — 720×160, the busybar-apps preview format" @click="shot"><span class="cap-ico" v-html="icons.camera"></span>PNG</button>
-      <button class="cap-btn" :class="{ rec: recording }" :title="recording ? 'Stop and save preview.gif' : 'Record preview.gif — 720×160 @ 20 fps, max 30 s'" @click="toggleRec" :disabled="encoding">
+      <button class="cap-btn" title="Save preview.png at 720×160 in the busybar-apps preview format" @click="shot"><span class="cap-ico" v-html="icons.camera"></span>PNG</button>
+      <button class="cap-btn" :class="{ rec: recording }" :title="recording ? 'Stop and save preview.gif' : 'Record preview.gif at 720×160, 20 fps, max 30 s'" @click="toggleRec" :disabled="encoding">
         <span class="cap-ico" v-html="icons.record"></span>{{ recording ? elapsed.toFixed(1) + 's · stop' : encoding ? 'encoding…' : 'GIF' }}
       </button>
     </div>

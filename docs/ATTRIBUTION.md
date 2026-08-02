@@ -28,3 +28,11 @@ All licensed under the SIL Open Font License, version 1.1.
 ## Attribution
 
 This project bundles these assets to enable faithful prototyping against the BUSY Bar API. "BUSY Bar" is a product of Flipper Devices Inc.; this project is unaffiliated and unofficial.
+
+## BarPilot compatibility reference
+
+FounderOS uses [BarPilot](https://github.com/nastea1/barpilot), copyright its contributors and licensed under the MIT License, as an external behavior and interoperability reference. The pinned reference is commit [`5c4afe96e178982d7e5f95a9dfea0cf761804d80`](https://github.com/nastea1/barpilot/blob/5c4afe96e178982d7e5f95a9dfea0cf761804d80/barpilot.html).
+
+BarPilot is not bundled into FounderOS. FounderOS independently implements the observed API 25 behaviors, including all 53 paths and 69 HTTP operations in BarPilot's endpoint console, differential element updates, priority conflicts, raw screen decoding, firmware blockers, and double-buffered raster uploads. The source pin and its SHA-256 are recorded in `tests/fixtures/barpilot-api25-contract.json` for reproducible review.
+
+The emulator uses Sharp as an npm dependency for bounded server-side decoding of PNG, JPEG, GIF, WebP, and SVG assets. Sharp is licensed under Apache-2.0. Its transitive license metadata is preserved by npm in `package-lock.json`.

@@ -28,12 +28,14 @@ def main() -> int:
     checks = [
         check_required_files,
         check_json_documents,
+        check_runtime_dependencies,
         check_production_config,
         check_autonomous_service,
         check_private_state,
         check_hook_state_paths,
         check_hook_runtime,
         check_font_atlas,
+        check_bar_pilot_contract,
         check_gallery_captures,
         check_english_interface,
         check_character_integrity,
@@ -55,6 +57,7 @@ def check_required_files() -> None:
         ".github/workflows/ci.yml",
         "SECURITY.md",
         "docs/founderos/PRODUCTION-CLOSURE.md",
+        "docs/founderos/BARPILOT-COMPATIBILITY.md",
         "founderos.production.example.json",
         "founderos.macos.example.json",
         "apps/founderos_install.zsh",
@@ -64,7 +67,15 @@ def check_required_files() -> None:
         "founder_os/service.py",
         "founder_os/interaction.py",
         "founder_os/core/scheduler.py",
+        "founder_os/display/capabilities.py",
+        "founder_os/display/verification.py",
+        "package-lock.json",
+        "screen_renderer.js",
+        "tools/barpilot_compat.py",
+        "tests/fixtures/barpilot-api25-contract.json",
+        "tests/barpilot_endpoint_matrix_test.js",
         "tools/capture_emulator.py",
+        "web/src/lib/background-clock.js",
     )
     missing = [name for name in required if not (ROOT / name).is_file()]
     if missing:
@@ -84,6 +95,60 @@ def check_json_documents() -> None:
             raise CheckFailure(f"invalid JSON in {name}: {exc}") from exc
         if not isinstance(payload, dict):
             raise CheckFailure(f"{name} must contain a JSON object")
+
+
+def check_runtime_dependencies() -> None:
+    try:
+        package = json.loads((ROOT / "package.json").read_text(encoding="utf-8"))
+        lock = json.loads((ROOT / "package-lock.json").read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CheckFailure(f"invalid root Node dependency metadata: {exc}") from exc
+    if package.get("dependencies", {}).get("sharp") != "0.35.3":
+        raise CheckFailure("the production screen decoder must pin Sharp 0.35.3")
+    if package.get("engines", {}).get("node") != ">=20.9.0":
+        raise CheckFailure("the root package must require Node.js 20.9.0 or newer")
+    locked_root = lock.get("packages", {}).get("", {})
+    if locked_root.get("dependencies", {}).get("sharp") != "0.35.3":
+        raise CheckFailure("the lockfile does not pin the production screen decoder")
+    workflow = (ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
+    if "Install locked emulator dependencies" not in workflow or "run: npm ci" not in workflow:
+        raise CheckFailure("CI does not install the locked emulator dependencies")
+    if (
+        "barpilot-conformance:" not in workflow
+        or "5c4afe96e178982d7e5f95a9dfea0cf761804d80/barpilot.html" not in workflow
+        or "--source-only" not in workflow
+    ):
+        raise CheckFailure("CI does not prove the endpoint contract against pinned BarPilot source")
+
+
+def check_bar_pilot_contract() -> None:
+    contract_path = ROOT / "tests" / "fixtures" / "barpilot-api25-contract.json"
+    try:
+        contract = json.loads(contract_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise CheckFailure(f"invalid BarPilot contract: {exc}") from exc
+    reference = contract.get("reference", {})
+    if reference.get("commit") != "5c4afe96e178982d7e5f95a9dfea0cf761804d80":
+        raise CheckFailure("BarPilot reference commit is not pinned")
+    digest = str(reference.get("sha256", ""))
+    if len(digest) != 64 or any(character not in "0123456789abcdef" for character in digest):
+        raise CheckFailure("BarPilot source hash is invalid")
+    endpoints = contract.get("barpilot_endpoints", [])
+    if len(endpoints) != 53 or len({endpoint.get("path") for endpoint in endpoints}) != 53:
+        raise CheckFailure("BarPilot contract must govern exactly 53 unique endpoints")
+    operation_count = sum(len(endpoint.get("methods", [])) for endpoint in endpoints)
+    if operation_count != 69:
+        raise CheckFailure(f"BarPilot contract must govern 69 HTTP operations, found {operation_count}")
+    incomplete = [
+        endpoint.get("path")
+        for endpoint in endpoints
+        if endpoint.get("support") not in {"emulated", "stateful"}
+        or not endpoint.get("behavior")
+    ]
+    if incomplete:
+        raise CheckFailure(f"BarPilot endpoints lack explicit behavior: {incomplete}")
+    if contract.get("status_websocket", {}).get("path") != "/api/status/ws":
+        raise CheckFailure("BarPilot status WebSocket is not governed")
 
 
 def check_production_config() -> None:
@@ -107,6 +172,8 @@ def check_production_config() -> None:
             os.environ.update(previous)
     if config["runtime"]["environment"] != "production":
         raise CheckFailure("production example does not enable production validation")
+    if config["display"]["text_rendering"] != "auto":
+        raise CheckFailure("production display must auto-verify Unicode rendering")
     linear = config["connectors"]["linear"]
     if linear.get("scope") != "portfolio" or not linear.get("team_keys"):
         raise CheckFailure("production Linear must use an allowlisted portfolio scope")
@@ -124,6 +191,9 @@ def check_autonomous_service() -> None:
         "FOUNDEROS_BOOTSTRAPPED=1",
         "mktemp -d",
         "web/dist",
+        "public/animations",
+        "screen_renderer.js",
+        "node_modules",
         "founderos.runtime.json",
     )
     missing_bootstrap_controls = [
@@ -133,8 +203,6 @@ def check_autonomous_service() -> None:
         raise CheckFailure(
             f"private service bootstrap controls are missing: {missing_bootstrap_controls}"
         )
-    if "public/animations" in bootstrap:
-        raise CheckFailure("private service bootstrap includes unused stock animations")
     if "founderos_bootstrap.py" in controller or not (
         "founderos_install.zsh" in controller and "os.execv" in controller
     ):

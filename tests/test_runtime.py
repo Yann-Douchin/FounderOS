@@ -58,6 +58,9 @@ class RuntimeTests(unittest.TestCase):
             self.assertTrue(first_displayed)
             self.assertTrue(second_displayed)
             self.assertEqual(len(display.frames), 2)
+            self.assertTrue(display.frames[1])
+            self.assertTrue(all(element["id"].startswith("icon-") for element in display.frames[1]))
+            self.assertFalse(any(element.get("scroll_rate") for element in display.frames[1]))
             first_pixels = [
                 element["fill_colors"]
                 for element in display.frames[0]
@@ -69,6 +72,55 @@ class RuntimeTests(unittest.TestCase):
                 if element["id"].startswith("icon-")
             ]
             self.assertNotEqual(first_pixels, second_pixels)
+
+    def test_refresh_probe_does_not_restart_scrolling_text(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={
+                    "memory": {"path": str(Path(folder) / "memory.json")},
+                    "display": {"content_icon": {"enabled": False}},
+                }
+            )
+            display = RecordingDisplay()
+            runtime = FounderOSRuntime(config, display=display)
+            selected = RankedEvent(Event(source="gmail", title="Décision déjà validée"), 90, {})
+
+            with patch("founder_os.core.runtime.time.monotonic", side_effect=(10.0, 26.0)):
+                runtime._render(selected, NOW)
+                runtime._render(selected, NOW)
+
+            self.assertEqual(len(display.frames), 2)
+            self.assertEqual(len(display.frames[1]), 1)
+            self.assertFalse(display.frames[1][0].get("scroll_rate"))
+
+    def test_same_event_content_update_is_sent_without_restarting_unchanged_elements(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={
+                    "memory": {"path": str(Path(folder) / "memory.json")},
+                    "display": {"content_icon": {"enabled": False}},
+                }
+            )
+            display = RecordingDisplay()
+            runtime = FounderOSRuntime(config, display=display)
+            first = RankedEvent(
+                Event(source="linear", title="Décision initiale", id="linear:decision"),
+                90,
+                {},
+            )
+            updated = RankedEvent(
+                Event(source="linear", title="Décision corrigée", id="linear:decision"),
+                90,
+                {},
+            )
+
+            with patch("founder_os.core.runtime.time.monotonic", side_effect=(10.0, 10.1)):
+                runtime._render(first, NOW)
+                runtime._render(updated, NOW)
+
+            self.assertEqual(len(display.frames), 2)
+            self.assertEqual([element["id"] for element in display.frames[1]], ["title"])
+            self.assertEqual(display.frames[1][0]["text"], "Décision corrigée")
 
     def test_disabling_icon_avoids_animation_only_redraws(self) -> None:
         with tempfile.TemporaryDirectory() as folder:

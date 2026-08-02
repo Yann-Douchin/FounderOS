@@ -86,7 +86,7 @@ def main():
         cur_vol = volume
     elif cur_vol == 0:
         print(
-            "warning: device volume is 0 — sounds will be silent. "
+            "warning: device volume is 0, sounds will be silent. "
             "Pass --volume 70 (or higher) to hear them.",
             file=sys.stderr,
         )

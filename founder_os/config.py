@@ -55,6 +55,12 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "allow_insecure_http": False,
         "min_hold_seconds": 6.0,
         "show_idle": True,
+        "lease_seconds": 300.0,
+        "lease_refresh_ratio": 0.8,
+        "conflict_retry_seconds": 2.0,
+        "conflict_retry_max_seconds": 30.0,
+        "clear_on_shutdown": True,
+        "text_rendering": "auto",
         "content_icon": {
             "enabled": True,
             "frame_seconds": 1.0,
@@ -311,6 +317,17 @@ def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = Non
         raise ConfigError("display.device_priority must be between 1 and 100")
     if float(display["min_hold_seconds"]) < 0:
         raise ConfigError("display.min_hold_seconds cannot be negative")
+    if float(display["lease_seconds"]) < 30:
+        raise ConfigError("display.lease_seconds must be at least 30 seconds")
+    lease_refresh_ratio = float(display["lease_refresh_ratio"])
+    if not 0.5 <= lease_refresh_ratio < 1:
+        raise ConfigError("display.lease_refresh_ratio must be between 0.5 and 1")
+    if float(display["conflict_retry_seconds"]) <= 0:
+        raise ConfigError("display.conflict_retry_seconds must be positive")
+    if float(display["conflict_retry_max_seconds"]) < float(display["conflict_retry_seconds"]):
+        raise ConfigError("display.conflict_retry_max_seconds must not be below conflict_retry_seconds")
+    if str(display["text_rendering"]).strip().lower() not in {"auto", "native", "raster_non_ascii"}:
+        raise ConfigError("display.text_rendering must be auto, native, or raster_non_ascii")
     if float(display["content_icon"]["frame_seconds"]) <= 0:
         raise ConfigError("display.content_icon.frame_seconds must be positive")
     if not re.fullmatch(r"\d+\.\d+\.\d+", str(display["api_semver"])):

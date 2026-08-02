@@ -112,7 +112,7 @@ DELETE /api/display/draw?application_name=founderos
 
 Every draw contains `application_name`, `priority`, and `elements`, plus API version and optional token headers. HTTP 409 is handled as a higher-priority owner. Structural layout changes clear the FounderOS application before drawing, which prevents stale merged elements on hardware.
 
-The renderer also chooses one of nine animated 8 by 8 icons from event semantics. Urgency and content keywords take precedence, while the connector source is only a fallback. Each frame redraws the same 64 one-pixel rectangles with stable IDs, using the background color for inactive pixels. This matches the physical firmware's element-merging behavior, stays below the 100-element request limit, and requires no emulator-specific asset or LLM call.
+The renderer also chooses one of six governed animated 8 by 8 states from event semantics: waiting, blocked, decision, meeting, validation, and success. Urgency, kind, action requirement, and content keywords determine the state. Each frame redraws the same 64 one-pixel rectangles with stable IDs, using the background color for inactive pixels. This matches the physical firmware's element-merging behavior, stays below the 100-element request limit, and requires no emulator-specific asset or LLM call.
 
 Permission and agent-usage events use dedicated layouts. A permission request pulses its accent, shows a countdown, and reserves red and green answer rails. A usage event renders up to two deterministic quota bars. These layouts use only standard text and rectangle elements.
 

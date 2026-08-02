@@ -9,5 +9,11 @@
     "test": "python3 -m unittest discover -s tests -v",
     "founderos:demo": "python3 apps/founderos.py --demo"
   },
+  "dependencies": {
+    "sharp": "0.35.3"
+  },
+  "engines": {
+    "node": ">=20.9.0"
+  },
   "license": "MIT"
 }

@@ -54,6 +54,9 @@ def main() -> int:
     recording = RecordingDisplay() if args.dry_run else None
     runtime = FounderOSRuntime.from_path(args.config, overrides=overrides, display=recording)
     if args.once or args.dry_run:
+        # One-shot output remains visible until its bounded display lease expires.
+        # Long-running services still clear their application namespace on shutdown.
+        runtime.clear_on_shutdown = False
         try:
             runtime.validate_display()
             state = runtime.tick(force_poll=True)

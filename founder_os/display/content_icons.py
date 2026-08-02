@@ -10,7 +10,7 @@ from founder_os.models import Event
 ICON_SIZE = 8
 
 # `#` uses the event accent, `+` uses white, and `.` uses the background.
-ICON_FRAMES: dict[str, tuple[tuple[str, ...], ...]] = {
+_PIXEL_DRAWINGS: dict[str, tuple[tuple[str, ...], ...]] = {
     "alert": (
         (
             "...##...",
@@ -52,94 +52,6 @@ ICON_FRAMES: dict[str, tuple[tuple[str, ...], ...]] = {
             "#...++.#",
             "#...++.#",
             "#......#",
-            "########",
-        ),
-    ),
-    "mail": (
-        (
-            "......+.",
-            "#######.",
-            "#.....#+",
-            "##...##.",
-            "#.#.#.#.",
-            "#..#..#.",
-            "#.....#.",
-            "#######.",
-        ),
-        (
-            ".......+",
-            "#######+",
-            "#.....#.",
-            "##...##.",
-            "#.#.#.#.",
-            "#..#..#.",
-            "#.....#.",
-            "#######.",
-        ),
-    ),
-    "chat": (
-        (
-            ".######.",
-            "#......#",
-            "#.+.+..#",
-            "#......#",
-            "#......#",
-            ".#####..",
-            "..#.....",
-            ".#......",
-        ),
-        (
-            ".######.",
-            "#......#",
-            "#..+.+.#",
-            "#......#",
-            "#......#",
-            ".#####..",
-            "..#.....",
-            ".#......",
-        ),
-    ),
-    "code": (
-        (
-            "########",
-            "#......#",
-            "#.##...#",
-            "#...#..#",
-            "#.##...#",
-            "#....+.#",
-            "#....+.#",
-            "########",
-        ),
-        (
-            "########",
-            "#......#",
-            "#.##...#",
-            "#...#..#",
-            "#.##...#",
-            "#......#",
-            "#....++#",
-            "########",
-        ),
-    ),
-    "trend": (
-        (
-            ".......+",
-            ".....##+",
-            "...###..",
-            "..##....",
-            "###.....",
-            "#.......",
-            "#.......",
-            "########",
-        ),
-        (
-            ".....+++",
-            ".....#++",
-            "...###.+",
-            "..##....",
-            "###.....",
-            "#.......",
-            "#.......",
             "########",
         ),
     ),
@@ -211,6 +123,38 @@ ICON_FRAMES: dict[str, tuple[tuple[str, ...], ...]] = {
     ),
 }
 
+# FounderOS intentionally exposes a six-state visual language. The private
+# pixel drawings above are reused to keep the state vocabulary compact.
+ICON_FRAMES = {
+    "waiting": (
+        (
+            "########",
+            ".#++++#.",
+            "..#++#..",
+            "...##...",
+            "...##...",
+            "..#..#..",
+            ".#....#.",
+            "########",
+        ),
+        (
+            "########",
+            ".#....#.",
+            "..#..#..",
+            "...##...",
+            "...##...",
+            "..#++#..",
+            ".#++++#.",
+            "########",
+        ),
+    ),
+    "blocked": _PIXEL_DRAWINGS["alert"],
+    "decision": _PIXEL_DRAWINGS["focus"],
+    "meeting": _PIXEL_DRAWINGS["calendar"],
+    "validation": _PIXEL_DRAWINGS["task"],
+    "success": _PIXEL_DRAWINGS["decision"],
+}
+
 
 _ALERT_KEYWORDS = (
     "blocked", "blocker", "bloqu", "incident", "urgent", "escalad", "outage",
@@ -221,55 +165,38 @@ _CALENDAR_KEYWORDS = (
     "meeting", "reunion", "rendez-vous", "calendar", "agenda", "appel", "call",
     "demo", "entretien",
 )
-_MAIL_KEYWORDS = (
-    "email", "e-mail", "mail", "repond", "inbox", "sender", "expediteur", "courriel",
-)
-_CHAT_KEYWORDS = ("slack", "mention", "message", "chat", "commentaire", "thread")
-_CODE_KEYWORDS = (
-    "bug", "fix", "deploy", "code", "engineering", "ingenierie", "pull request",
-    "merge", "build", "release", "api", "technique", "develop",
-)
-_TREND_KEYWORDS = (
-    "revenue", "revenu", "sales", "vente", "deal", "client", "customer", "investor",
-    "investisseur", "stripe", "shopify", "conversion", "growth", "croissance", "linkedin",
-)
 _DECISION_KEYWORDS = (
-    "decision", "approve", "approval", "approuv", "validate", "validation", "review",
-    "revue", "choisir", "arbitr", "signer", "signature",
+    "decision", "decide", "choisir", "arbitr", "repond", "reply", "respond", "envoyer",
+    "send", "confirmer", "confirm", "question", "permission",
+)
+_VALIDATION_KEYWORDS = (
+    "approve", "approval", "approuv", "validate", "validation", "review", "revue",
+    "signer", "signature", "accept", "qa", "test", "verification", "verifier",
+)
+_SUCCESS_KEYWORDS = (
+    "success", "succeeded", "complete", "completed", "done", "resolved", "shipped",
+    "deployed", "reussi", "termine", "finalise", "livre", "resolu", "valide",
 )
 
 
 def select_content_icon(event: Event) -> str:
-    """Choose one icon from event semantics, with source only as a fallback."""
+    """Choose one of the six governed state icons from event semantics."""
     searchable = _searchable_text(" ".join((event.title, event.body, event.kind)))
     if event.urgency == "critical" or event.kind in {"blocker", "incident"}:
-        return "alert"
-    for icon_name, keywords in (
-        ("alert", _ALERT_KEYWORDS),
-        ("calendar", _CALENDAR_KEYWORDS),
-        ("mail", _MAIL_KEYWORDS),
-        ("chat", _CHAT_KEYWORDS),
-        ("code", _CODE_KEYWORDS),
-        ("trend", _TREND_KEYWORDS),
-        ("decision", _DECISION_KEYWORDS),
+        return "blocked"
+    if any(keyword in searchable for keyword in _ALERT_KEYWORDS):
+        return "blocked"
+    if any(keyword in searchable for keyword in _SUCCESS_KEYWORDS):
+        return "success"
+    if event.source == "calendar" or any(keyword in searchable for keyword in _CALENDAR_KEYWORDS):
+        return "meeting"
+    if any(keyword in searchable for keyword in _VALIDATION_KEYWORDS):
+        return "validation"
+    if event.kind == "permission_request" or event.action_required or any(
+        keyword in searchable for keyword in _DECISION_KEYWORDS
     ):
-        if any(keyword in searchable for keyword in keywords):
-            return icon_name
-    source_fallback = {
-        "calendar": "calendar",
-        "gmail": "mail",
-        "slack": "chat",
-        "linear": "task",
-        "claude": "code",
-        "chatgpt_codex": "code",
-        "github": "code",
-        "stripe": "trend",
-        "shopify": "trend",
-        "linkedin": "trend",
-    }
-    if event.source in source_fallback:
-        return source_fallback[event.source]
-    return "decision" if event.action_required else "focus"
+        return "decision"
+    return "waiting"
 
 
 def content_icon_frame(event: Event, frame_index: int) -> tuple[str, tuple[str, ...]]:

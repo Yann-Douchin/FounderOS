@@ -1,13 +1,18 @@
 from __future__ import annotations
 
+import base64
 import json
+import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from founder_os.display.busybar import BusyBarDisplay
+from founder_os.display.capabilities import capabilities_for
 from founder_os.display.layouts import event_layout, idle_layout
+from founder_os.display.verification import ACCENT_PROBES
 from founder_os.models import Event, RankedEvent
 
 
@@ -17,6 +22,9 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 class FakeResponse:
+    def __init__(self, payload=b'{"result":"OK"}'):
+        self.payload = payload
+
     def __enter__(self):
         return self
 
@@ -24,7 +32,7 @@ class FakeResponse:
         return False
 
     def read(self, size=-1):
-        return b'{"result":"OK"}'
+        return self.payload
 
 
 class DisplayTests(unittest.TestCase):
@@ -94,6 +102,9 @@ class DisplayTests(unittest.TestCase):
         required = "ÀÂÄÇÉÈÊËÎÏÔÖÙÛÜŸŒàâäçéèêëîïôöùûüÿœ’«»"
         missing = [character for character in required if str(ord(character)) not in atlas["global"]["glyphs"]]
         self.assertEqual(missing, [])
+
+    def test_hardware_probe_uses_the_exact_required_french_samples(self) -> None:
+        self.assertEqual(ACCENT_PROBES, ("Échéance", "décision", "ingénierie", "œ", "’"))
 
     def test_french_accents_are_inside_the_visible_global_font_line(self) -> None:
         atlas = json.loads((ROOT / "public/fonts/font-atlas.json").read_text(encoding="utf-8"))
@@ -192,6 +203,97 @@ class DisplayTests(unittest.TestCase):
             calls[1].full_url,
             "http://127.0.0.1:8080/api/display/draw?application_name=founderos",
         )
+
+    def test_screen_readback_decodes_front_bgr_and_back_grayscale(self) -> None:
+        front = bytes([30, 20, 10]) * (72 * 16)
+        back = bytes([77]) * (80 * 80)
+        display = BusyBarDisplay("127.0.0.1:8080")
+        with patch(
+            "founder_os.display.busybar._OPENER.open",
+            side_effect=(
+                FakeResponse(base64.b64encode(front)),
+                FakeResponse(base64.b64encode(back)),
+            ),
+        ):
+            front_capture = display.screen(0)
+            back_capture = display.screen(1)
+        self.assertEqual(front_capture.mode, "RGB")
+        self.assertEqual(front_capture.pixel(0, 0), (10, 20, 30))
+        self.assertEqual(back_capture.mode, "L")
+        self.assertEqual(back_capture.pixel(0, 0), (77,))
+
+    def test_raster_fallback_uploads_png_then_draws_an_image(self) -> None:
+        calls = []
+
+        def capture(request, timeout):
+            calls.append(request)
+            return FakeResponse()
+
+        display = BusyBarDisplay("127.0.0.1:8080", text_rendering="raster_non_ascii")
+        with patch("founder_os.display.busybar._OPENER.open", side_effect=capture):
+            display.draw([
+                {
+                    "id": "title",
+                    "type": "text",
+                    "text": "Décision déjà validée",
+                    "x": 16,
+                    "y": 5,
+                    "width": 56,
+                    "font": "global",
+                    "color": "0xFFFFFFFF",
+                    "scroll_rate": 420,
+                }
+            ])
+        self.assertEqual(calls[0].get_method(), "POST")
+        self.assertIn("/api/assets/upload?", calls[0].full_url)
+        self.assertTrue(calls[0].data.startswith(b"\x89PNG\r\n\x1a\n"))
+        body = json.loads(calls[1].data.decode("utf-8"))
+        self.assertEqual(body["elements"][0]["type"], "image")
+        self.assertEqual(body["elements"][0]["id"], "title")
+        self.assertRegex(body["elements"][0]["path"], r"^raster-[0-9a-f]{12}-[ab]\.png$")
+
+    def test_auto_text_rendering_verifies_then_caches_raster_fallback(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            cache = Path(folder) / "display-capabilities.json"
+            display = BusyBarDisplay(
+                "127.0.0.1:8080",
+                text_rendering="auto",
+                text_capability_cache_path=str(cache),
+            )
+            observed_modes = []
+
+            def verify(candidate, atlas_path):
+                observed_modes.append(candidate.resolved_text_rendering)
+                return SimpleNamespace(passed=len(observed_modes) == 2)
+
+            with (
+                patch.object(display, "firmware_status", return_value={"version": "1.1.1", "api_semver": "25.0.0"}),
+                patch("founder_os.display.verification.verify_french_glyphs", side_effect=verify),
+            ):
+                self.assertEqual(display.resolve_text_rendering(), "raster_non_ascii")
+            self.assertEqual(observed_modes, ["native", "raster_non_ascii"])
+            self.assertEqual(cache.stat().st_mode & 0o777, 0o600)
+
+            cached = BusyBarDisplay(
+                "127.0.0.1:8080",
+                text_rendering="auto",
+                text_capability_cache_path=str(cache),
+            )
+            with (
+                patch.object(cached, "firmware_status", return_value={"version": "1.1.1", "api_semver": "25.0.0"}),
+                patch("founder_os.display.verification.verify_french_glyphs") as verifier,
+            ):
+                self.assertEqual(cached.resolve_text_rendering(), "raster_non_ascii")
+                verifier.assert_not_called()
+
+    def test_known_firmware_capabilities_capture_bar_pilot_quirks(self) -> None:
+        capabilities = capabilities_for("1.1.1", "25.0.0")
+        self.assertEqual(capabilities.profile, "busybar-1.1.1-api25")
+        self.assertTrue(capabilities.timer_blocks_canvas)
+        self.assertTrue(capabilities.physical_busy_hidden_from_snapshot)
+        self.assertTrue(capabilities.scrolling_text_restarts_when_redrawn)
+        self.assertEqual(capabilities.front_screen_encoding, "bgr888")
+        self.assertEqual(capabilities_for("v1.1.1-release", "25.0.0").profile, "busybar-1.1.1-api25")
 
 
 if __name__ == "__main__":

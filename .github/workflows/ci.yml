@@ -19,6 +19,13 @@ jobs:
       - uses: actions/setup-python@v6
         with:
           python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked emulator dependencies
+        run: npm ci
       - name: Compile Python sources
         run: python -m compileall -q founder_os apps tests tools
       - name: Run unit and integration tests
@@ -41,3 +48,18 @@ jobs:
         run: npm ci --prefix web
       - name: Build emulator frontend
         run: npm run build
+
+  barpilot-conformance:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - name: Fetch the pinned BarPilot reference
+        run: >-
+          curl --proto '=https' --tlsv1.2 --fail --location
+          https://raw.githubusercontent.com/nastea1/barpilot/5c4afe96e178982d7e5f95a9dfea0cf761804d80/barpilot.html
+          --output /tmp/barpilot.html
+      - name: Prove the endpoint contract against the pinned source
+        run: python tools/barpilot_compat.py --source /tmp/barpilot.html --source-only
