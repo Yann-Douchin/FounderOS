@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -15,6 +16,25 @@ from urllib.parse import urlsplit
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
+
+
+def _delegate_protected_service_install() -> None:
+    if __name__ != "__main__" or os.environ.get("FOUNDEROS_BOOTSTRAPPED") == "1":
+        return
+    arguments = sys.argv[1:]
+    try:
+        service_index = arguments.index("service")
+    except ValueError:
+        return
+    if service_index + 1 >= len(arguments) or arguments[service_index + 1] != "install":
+        return
+    bootstrap = REPO_ROOT / "apps" / "founderos_bootstrap.py"
+    os.execv(sys.executable, [sys.executable, str(bootstrap), *arguments])
+
+
+_delegate_protected_service_install()
+
+
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
@@ -29,11 +49,16 @@ from founder_os.secrets import (  # noqa: E402
 )
 from founder_os.service import (  # noqa: E402
     EMULATOR_LAUNCH_AGENT_LABEL,
+    LAUNCH_AGENT_LABEL,
+    LaunchAgentSnapshot,
     ServiceError,
+    capture_launch_agent,
     install_emulator_launch_agent,
     install_launch_agent,
     launch_agent_status,
+    restore_launch_agent,
     service_status,
+    stage_runtime_bundle,
     uninstall_emulator_launch_agent,
     uninstall_launch_agent,
 )
@@ -197,42 +222,71 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
         )
         return 0
     _preflight(config_path)
-    if not args.skip_emulator:
-        node_executable = shutil.which("node")
-        if not node_executable:
-            raise ServiceError("Node.js is required to supervise the BUSY Bar emulator")
-        emulator_was_loaded = launch_agent_status(EMULATOR_LAUNCH_AGENT_LABEL).loaded
-        emulator_destination = install_emulator_launch_agent(
-            repository=REPO_ROOT,
-            node_executable=node_executable,
-            python_executable=sys.executable,
-            runtime_state_root=state_root(),
-            port=_emulator_port(config),
-        )
-        print(f"BUSY Bar emulator LaunchAgent installed: {emulator_destination}")
-        try:
-            _wait_for_emulator(config, timeout_seconds=12.0)
-        except ServiceError:
-            if not emulator_was_loaded:
-                uninstall_emulator_launch_agent()
-            raise
-    else:
-        _validate_display(config, wait_seconds=0.0)
-    runtime_was_loaded = service_status(health_path=health_path).loaded
+    state = state_root()
+    deployment = stage_runtime_bundle(
+        repository=REPO_ROOT,
+        config_path=config_path,
+        runtime_state_root=state,
+    )
+    emulator_snapshot = (
+        capture_launch_agent(EMULATOR_LAUNCH_AGENT_LABEL)
+        if not args.skip_emulator
+        else None
+    )
+    runtime_snapshot = capture_launch_agent(LAUNCH_AGENT_LABEL)
+    emulator_changed = False
+    runtime_changed = False
+    emulator_destination = None
     try:
+        if not args.skip_emulator:
+            node_executable = shutil.which("node")
+            if not node_executable:
+                raise ServiceError("Node.js is required to supervise the BUSY Bar emulator")
+            emulator_destination = install_emulator_launch_agent(
+                repository=deployment.root,
+                node_executable=node_executable,
+                python_executable=sys.executable,
+                runtime_state_root=state,
+                port=_emulator_port(config),
+            )
+            emulator_changed = True
+            _wait_for_emulator(config, timeout_seconds=12.0)
+        else:
+            _validate_display(config, wait_seconds=0.0)
         destination = install_launch_agent(
-            repository=REPO_ROOT,
-            config_path=config_path,
+            repository=deployment.root,
+            config_path=deployment.config_path,
             python_executable=sys.executable,
-            runtime_state_root=state_root(),
+            runtime_state_root=state,
         )
+        runtime_changed = True
         _wait_for_runtime(config, timeout_seconds=60.0)
-    except ServiceError:
-        if not runtime_was_loaded:
-            uninstall_launch_agent()
+    except ServiceError as exc:
+        snapshots: list[LaunchAgentSnapshot] = []
+        if runtime_changed:
+            snapshots.append(runtime_snapshot)
+        if emulator_changed and emulator_snapshot is not None:
+            snapshots.append(emulator_snapshot)
+        rollback_failures = _restore_launch_agents(snapshots)
+        if rollback_failures:
+            labels = ", ".join(rollback_failures)
+            raise ServiceError(f"service update failed and rollback was incomplete: {labels}") from exc
         raise
+    if emulator_destination is not None:
+        print(f"BUSY Bar emulator LaunchAgent installed: {emulator_destination}")
     print(f"FounderOS LaunchAgent installed: {destination}")
+    print(f"FounderOS runtime deployed: {deployment.root}")
     return 0
+
+
+def _restore_launch_agents(snapshots: list[LaunchAgentSnapshot]) -> list[str]:
+    failures: list[str] = []
+    for snapshot in snapshots:
+        try:
+            restore_launch_agent(snapshot)
+        except ServiceError:
+            failures.append(snapshot.label)
+    return failures
 
 
 def _wait_for_runtime(config: dict, *, timeout_seconds: float) -> None:

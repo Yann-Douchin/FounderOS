@@ -8,24 +8,45 @@ import tempfile
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from apps import founderosctl
+from apps import founderos_bootstrap, founderosctl
 from founder_os.connectors.base import ConnectorConfigurationError
 from founder_os.connectors.linear_oauth import LinearAccessTokenProvider
 from founder_os.health import HealthReporter
 from founder_os.oauth import OAuthFlowError, _CallbackServer, authorize_google, authorize_linear
 from founder_os.secrets import MacOSKeychainStore, MemorySecretStore, SecretError, SecretResolver
 from founder_os.service import (
+    EMULATOR_LAUNCH_AGENT_LABEL,
+    LAUNCH_AGENT_LABEL,
     LaunchAgentStatus,
+    LaunchAgentSnapshot,
+    RuntimeDeployment,
     ServiceError,
     emulator_launch_agent_payload,
+    install_launch_agent,
     launch_agent_payload,
     service_status,
+    stage_runtime_bundle,
 )
 
 
 NOW = datetime(2026, 8, 1, 10, 0, tzinfo=timezone.utc)
+
+
+def make_runtime_source(root: Path) -> tuple[Path, Path]:
+    repository = root / "repository"
+    for directory in ("founder_os", "apps", "public", "web/dist"):
+        (repository / directory).mkdir(parents=True, exist_ok=True)
+    (repository / "founder_os" / "__init__.py").write_text("", encoding="utf-8")
+    (repository / "apps" / "founderos.py").write_text("print('ready')\n", encoding="utf-8")
+    (repository / "public" / "font.txt").write_text("écran", encoding="utf-8")
+    (repository / "web" / "dist" / "index.html").write_text("<main>FounderOS</main>", encoding="utf-8")
+    (repository / "server.js").write_text("'use strict';\n", encoding="utf-8")
+    config = root / "founderos.local.json"
+    config.write_text('{"runtime":{"timezone":"Europe/Madrid"}}', encoding="utf-8")
+    return repository, config
 
 
 class FakeKeychainAPI:
@@ -63,6 +84,20 @@ class FakeCallback:
 
 
 class AutonomousServiceTests(unittest.TestCase):
+    def test_bootstrap_rewrites_only_the_config_path(self) -> None:
+        staged = Path("/private/runtime/founderos.runtime.json")
+        self.assertEqual(
+            founderos_bootstrap._rewrite_config(
+                ["--config", "source.json", "service", "install", "--skip-emulator"],
+                staged,
+            ),
+            ["--config", str(staged), "service", "install", "--skip-emulator"],
+        )
+        self.assertEqual(
+            founderos_bootstrap._rewrite_config(["service", "install"], staged),
+            ["--config", str(staged), "service", "install"],
+        )
+
     def test_keychain_store_never_needs_a_secret_command_argument(self) -> None:
         api = FakeKeychainAPI()
         store = MacOSKeychainStore("com.founderos.test", api=api)
@@ -343,6 +378,154 @@ class AutonomousServiceTests(unittest.TestCase):
         self.assertNotIn("SECRET", serialized)
         self.assertEqual(payload["Umask"], 0o077)
         self.assertTrue(payload["RunAtLoad"])
+
+    def test_runtime_bundle_is_private_immutable_and_reused_by_digest(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            repository, config = make_runtime_source(root)
+            cache = repository / "apps" / "__pycache__"
+            cache.mkdir()
+            (cache / "founderos.pyc").write_bytes(b"ignored")
+            animation = repository / "public" / "animations" / "stock"
+            animation.mkdir(parents=True)
+            (animation / "frame.png").write_bytes(b"unused stock frame")
+            first = stage_runtime_bundle(
+                repository=repository,
+                config_path=config,
+                runtime_state_root=root / "state",
+            )
+            second = stage_runtime_bundle(
+                repository=repository,
+                config_path=config,
+                runtime_state_root=root / "state",
+            )
+            root_mode = stat.S_IMODE(first.root.stat().st_mode)
+            config_mode = stat.S_IMODE(first.config_path.stat().st_mode)
+            source_mode = stat.S_IMODE((first.root / "apps" / "founderos.py").stat().st_mode)
+            cache_exists = (first.root / "apps" / "__pycache__").exists()
+            stock_animation_exists = (first.root / "public" / "animations").exists()
+            staged_config_name = first.config_path.name
+        self.assertEqual(first, second)
+        self.assertEqual(root_mode, 0o700)
+        self.assertEqual(config_mode, 0o600)
+        self.assertEqual(source_mode, 0o600)
+        self.assertFalse(cache_exists)
+        self.assertFalse(stock_animation_exists)
+        self.assertEqual(staged_config_name, "founderos.runtime.json")
+
+    def test_runtime_bundle_digest_changes_with_configuration(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            repository, config = make_runtime_source(root)
+            first = stage_runtime_bundle(
+                repository=repository,
+                config_path=config,
+                runtime_state_root=root / "state",
+            )
+            config.write_text('{"runtime":{"timezone":"UTC"}}', encoding="utf-8")
+            second = stage_runtime_bundle(
+                repository=repository,
+                config_path=config,
+                runtime_state_root=root / "state",
+            )
+        self.assertNotEqual(first.deployment_id, second.deployment_id)
+        self.assertNotEqual(first.root, second.root)
+
+    def test_runtime_bundle_rejects_symbolic_links(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            repository, config = make_runtime_source(root)
+            (repository / "apps" / "linked.py").symlink_to(repository / "apps" / "founderos.py")
+            with self.assertRaisesRegex(ServiceError, "symbolic link"):
+                stage_runtime_bundle(
+                    repository=repository,
+                    config_path=config,
+                    runtime_state_root=root / "state",
+                )
+
+    def test_launch_agent_install_restores_prior_plist_on_launchctl_failure(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            repository, config = make_runtime_source(root)
+            destination = root / "Library" / "LaunchAgents" / f"{LAUNCH_AGENT_LABEL}.plist"
+            destination.parent.mkdir(parents=True)
+            destination.write_bytes(b"prior definition")
+            bootstrap_failed = False
+
+            def launchctl(*arguments: str, **_: object) -> None:
+                nonlocal bootstrap_failed
+                if arguments[0] == "bootstrap" and not bootstrap_failed:
+                    bootstrap_failed = True
+                    raise ServiceError("simulated bootstrap failure")
+
+            with patch("founder_os.service.sys.platform", "darwin"), patch.object(
+                Path, "home", return_value=root
+            ), patch(
+                "founder_os.service.launch_agent_status",
+                return_value=LaunchAgentStatus(True, 123, "running"),
+            ), patch("founder_os.service._run_launchctl", side_effect=launchctl):
+                with self.assertRaisesRegex(ServiceError, "simulated bootstrap failure"):
+                    install_launch_agent(
+                        repository=repository,
+                        config_path=config,
+                        python_executable=sys.executable,
+                        runtime_state_root=root / "state",
+                    )
+            restored = destination.read_bytes()
+        self.assertTrue(bootstrap_failed)
+        self.assertEqual(restored, b"prior definition")
+
+    def test_failed_readiness_rolls_back_runtime_then_emulator(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            deployment = RuntimeDeployment(
+                root=root / "deployment",
+                config_path=root / "deployment" / "founderos.runtime.json",
+                deployment_id="abc",
+            )
+            emulator_snapshot = LaunchAgentSnapshot(
+                EMULATOR_LAUNCH_AGENT_LABEL,
+                root / "emulator.plist",
+                b"emulator",
+                True,
+            )
+            runtime_snapshot = LaunchAgentSnapshot(
+                LAUNCH_AGENT_LABEL,
+                root / "runtime.plist",
+                b"runtime",
+                True,
+            )
+            config = {
+                "operations": {
+                    "health_path": str(root / "health.json"),
+                    "heartbeat_seconds": 15,
+                },
+                "display": {"host": "127.0.0.1:8080"},
+            }
+            args = SimpleNamespace(service_command="install", skip_emulator=False)
+            restored: list[str] = []
+            with patch.object(founderosctl, "_preflight"), patch.object(
+                founderosctl, "stage_runtime_bundle", return_value=deployment
+            ), patch.object(
+                founderosctl,
+                "capture_launch_agent",
+                side_effect=[emulator_snapshot, runtime_snapshot],
+            ), patch.object(founderosctl.shutil, "which", return_value="/usr/bin/node"), patch.object(
+                founderosctl, "install_emulator_launch_agent", return_value=root / "emulator.new.plist"
+            ), patch.object(founderosctl, "_wait_for_emulator"), patch.object(
+                founderosctl, "install_launch_agent", return_value=root / "runtime.new.plist"
+            ), patch.object(
+                founderosctl,
+                "_wait_for_runtime",
+                side_effect=ServiceError("runtime unhealthy"),
+            ), patch.object(
+                founderosctl,
+                "restore_launch_agent",
+                side_effect=lambda snapshot: restored.append(snapshot.label),
+            ), patch.object(founderosctl, "state_root", return_value=root / "state"):
+                with self.assertRaisesRegex(ServiceError, "runtime unhealthy"):
+                    founderosctl._service_command(args, config, root / "source.json")
+        self.assertEqual(restored, [LAUNCH_AGENT_LABEL, EMULATOR_LAUNCH_AGENT_LABEL])
 
     def test_emulator_launch_agent_is_loopback_only_and_contains_no_secret(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
