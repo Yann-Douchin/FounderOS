@@ -11,6 +11,7 @@ import stat
 import subprocess
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Mapping
@@ -27,6 +28,7 @@ _IGNORED_RUNTIME_DIRECTORIES = {"__pycache__"}
 _IGNORED_RUNTIME_FILES = {".DS_Store"}
 _IGNORED_RUNTIME_SUFFIXES = {".pyc", ".pyo"}
 _IGNORED_RUNTIME_SUBTREES = {Path("public/animations")}
+_LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 3
 
 
 class ServiceError(RuntimeError):
@@ -316,7 +318,7 @@ def restore_launch_agent(snapshot: LaunchAgentSnapshot) -> None:
     destination.parent.mkdir(parents=True, exist_ok=True)
     _write_private_bytes(destination, snapshot.plist_data)
     if snapshot.loaded:
-        _run_launchctl("bootstrap", domain, str(destination))
+        _bootstrap_launch_agent(domain, snapshot.label, destination)
         _run_launchctl("enable", f"{domain}/{snapshot.label}")
         _run_launchctl("kickstart", "-k", f"{domain}/{snapshot.label}")
 
@@ -629,7 +631,7 @@ def _replace_launch_agent(label: str, payload: Mapping[str, Any]) -> Path:
     try:
         _write_private_plist(destination, payload)
         _run_launchctl("bootout", f"{domain}/{label}", allowed_codes={0, 3, 113})
-        _run_launchctl("bootstrap", domain, str(destination))
+        _bootstrap_launch_agent(domain, label, destination)
         _run_launchctl("enable", f"{domain}/{label}")
         _run_launchctl("kickstart", "-k", f"{domain}/{label}")
     except (OSError, ServiceError) as exc:
@@ -674,6 +676,23 @@ def _fsync_directory(path: Path) -> None:
         os.fsync(descriptor)
     finally:
         os.close(descriptor)
+
+
+def _bootstrap_launch_agent(domain: str, label: str, destination: Path) -> None:
+    latest_error: ServiceError | None = None
+    for attempt in range(_LAUNCHCTL_BOOTSTRAP_ATTEMPTS):
+        try:
+            _run_launchctl("bootstrap", domain, str(destination))
+            return
+        except ServiceError as exc:
+            latest_error = exc
+            if attempt + 1 >= _LAUNCHCTL_BOOTSTRAP_ATTEMPTS:
+                break
+            _run_launchctl("bootout", f"{domain}/{label}", allowed_codes={0, 3, 113})
+            time.sleep(0.25 * (2 ** attempt))
+    if latest_error is not None:
+        raise latest_error
+    raise ServiceError(f"launchctl bootstrap did not run: {label}")
 
 
 def _run_launchctl(*arguments: str, allowed_codes: set[int] | None = None) -> None:
