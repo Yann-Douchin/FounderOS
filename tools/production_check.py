@@ -30,6 +30,7 @@ def main() -> int:
         check_json_documents,
         check_runtime_dependencies,
         check_production_config,
+        check_calendar_busy_automation,
         check_autonomous_service,
         check_private_state,
         check_hook_state_paths,
@@ -67,6 +68,8 @@ def check_required_files() -> None:
         "founder_os/service.py",
         "founder_os/interaction.py",
         "founder_os/core/scheduler.py",
+        "founder_os/automation/__init__.py",
+        "founder_os/automation/calendar_busy.py",
         "founder_os/closure/engine.py",
         "founder_os/closure/ledger.py",
         "founder_os/closure/models.py",
@@ -199,6 +202,30 @@ def check_production_config() -> None:
         raise CheckFailure("the production example does not activate the four primary live connectors")
     if config["closure"].get("rank_raw_events"):
         raise CheckFailure("production must rank governed obligations instead of duplicating raw events")
+
+
+def check_calendar_busy_automation() -> None:
+    config = json.loads((ROOT / "founderos.production.example.json").read_text(encoding="utf-8"))
+    indicator = config.get("automations", {}).get("calendar_busy_indicator", {})
+    if indicator.get("enabled") is not False:
+        raise CheckFailure("the deploy-specific Matter automation must be disabled in the public example")
+    if indicator.get("mode") != "busybar_matter" or indicator.get("require_pairing") is not True:
+        raise CheckFailure("the Calendar busy indicator must use a commissioned BUSY Bar Matter switch")
+    if indicator.get("include_all_day") is not False:
+        raise CheckFailure("all-day events must not activate the recording indicator by default")
+    automation = (ROOT / "founder_os" / "automation" / "calendar_busy.py").read_text(encoding="utf-8")
+    display = (ROOT / "founder_os" / "display" / "busybar.py").read_text(encoding="utf-8")
+    runtime = (ROOT / "founder_os" / "core" / "runtime.py").read_text(encoding="utf-8")
+    calendar = (ROOT / "founder_os" / "connectors" / "calendar.py").read_text(encoding="utf-8")
+    controller = (ROOT / "apps" / "founderosctl.py").read_text(encoding="utf-8")
+    if "/api/smart_home/switch" not in display or "calendar_busy" not in calendar:
+        raise CheckFailure("Calendar occupancy is not connected to the BUSY Bar Matter switch contract")
+    if "/api/busy/" in automation:
+        raise CheckFailure("Calendar occupancy must not start a BUSY timer that blocks the display")
+    if "source_events" not in runtime or "automation_health" not in runtime:
+        raise CheckFailure("the runtime does not govern Calendar automation input and health")
+    if "matter-status" not in controller:
+        raise CheckFailure("the physical Matter commissioning preflight is missing")
 
 
 def check_autonomous_service() -> None:
@@ -364,8 +391,28 @@ def check_english_interface() -> None:
 def check_character_integrity() -> None:
     suffixes = {".py", ".md", ".json", ".yml", ".yaml", ".js", ".vue"}
     ignored_parts = {"node_modules", ".git", "dist", "public"}
-    for path in ROOT.rglob("*"):
-        if not path.is_file() or path.suffix not in suffixes or ignored_parts.intersection(path.parts):
+    process = subprocess.run(
+        ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+        cwd=ROOT,
+        capture_output=True,
+        check=False,
+    )
+    if process.returncode:
+        raise CheckFailure("could not enumerate versioned sources for character validation")
+    try:
+        source_names = [
+            value.decode("utf-8")
+            for value in process.stdout.split(b"\0")
+            if value
+        ]
+    except UnicodeDecodeError as exc:
+        raise CheckFailure("Git contains a non-UTF-8 source path") from exc
+    for name in source_names:
+        path = ROOT / name
+        relative_parts = Path(name).parts
+        if path.suffix not in suffixes or ignored_parts.intersection(relative_parts):
+            continue
+        if not path.is_file():
             continue
         try:
             text = path.read_text(encoding="utf-8")

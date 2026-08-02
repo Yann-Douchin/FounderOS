@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/FounderOS-0.2.0-7C5CFC" alt="FounderOS" />
+  <img src="https://img.shields.io/badge/FounderOS-0.3.0-7C5CFC" alt="FounderOS" />
   <img src="https://img.shields.io/badge/API-25.0.0-2B7FFF" alt="API" />
   <img src="https://img.shields.io/badge/web%20UI-Vue%203-42b883" alt="Vue 3" />
   <img src="https://img.shields.io/badge/server-Node%2020.9%2B%20%2B%20Sharp-339933" alt="Server" />
@@ -81,6 +81,7 @@ FounderOS includes:
 - Linear, Slack, Gmail, Google Calendar, LinkedIn bridge, Claude, ChatGPT/Codex, Notion, Drive, Sheets, GitHub, deployment, Sentry, PostHog, Shopify, Superhuman reminder, Stripe, and Home Assistant connectors;
 - governed Linear portfolio scope with bounded pagination and project-risk rollups;
 - deterministic Gmail incoming-action and outgoing-promise classification, bounded Slack thread signals, and Calendar before/after meeting transitions;
+- a governed Calendar occupancy output that publishes busy state through the BUSY Bar Matter switch without blocking the 72x16 display;
 - operational false-ready gates, scoped evidence quorum, capacity and handoff checks, burst compaction, and source-priority normalization;
 - a local-only emulator Obligations tab plus audited CLI corrections for state, owner, next action, delegation, gates, evidence, and relationship cooling;
 - additional production connectors disabled by default until their narrow credentials and entity mappings are configured;
@@ -116,6 +117,12 @@ python3 apps/founderosctl.py --config founderos.autonomous.local.json relationsh
 ```
 
 See the [founder workflow closure program](docs/founderos/WORKFLOW-ROADMAP.md) for the shipped controls and the remaining deployment-specific activation gates.
+
+### Calendar busy indicator through Matter
+
+FounderOS can publish the current Google Calendar occupancy state to the BUSY Bar Matter switch. A Matter controller such as Apple Home, Google Home, or Home Assistant then maps switch `ON` to a red Hue office light and switch `OFF` to the light being off. This does not start a BUSY timer, so FounderOS retains the 72x16 canvas.
+
+Home Assistant is optional. If the BUSY Bar and Hue light are already available in Apple Home, two Apple Home automations are sufficient. See the [Matter indicator setup](docs/founderos/CONFIGURATION.md#calendar-busy-indicator-through-busy-bar-matter).
 
 ### Autonomous macOS service
 

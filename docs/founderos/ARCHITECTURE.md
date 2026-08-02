@@ -28,6 +28,24 @@ Linear  Slack  Gmail  Calendar  Notion  Drive  Sheets  GitHub  Observability
 
 Connectors import no display code. The display layer imports no connector code. The runtime is the only composition root.
 
+Calendar occupancy also feeds one governed output sidecar:
+
+```text
+normalized Calendar events + Calendar health
+                    |
+       deterministic occupancy policy
+                    |
+     BUSY Bar smart-home switch API
+                    |
+          commissioned Matter fabric
+                    |
+       controller rule to Hue light
+```
+
+This sidecar does not bypass the connector contract. The Calendar connector still emits normalized events only, and the runtime supplies those observations to the automation. The output never starts a BUSY timer or draws to the display. It changes the BUSY Bar Matter switch, while Apple Home, Google Home, or Home Assistant owns the device-to-device mapping. Automation health is reported separately from connector health and display health.
+
+The policy excludes cancelled, declined, and transparent meetings, applies explicit tentative and all-day settings, confirms every state transition, and retries with bounded backoff. If Calendar becomes stale, it holds the last applied state rather than emitting a false available signal. The supervised runtime restarts after failure and reconciles the switch on recovery.
+
 Authorized Codex app connectors can also feed the same contract through private, expiring JSON snapshots. This bridge keeps OAuth credentials out of the FounderOS process and lets the project move from gallery fixtures to real data one source at a time. Direct API polling remains the autonomous deployment path.
 
 Claude and Codex permission hooks share a second, narrowly scoped local protocol:

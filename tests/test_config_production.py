@@ -91,6 +91,51 @@ class ProductionConfigTests(unittest.TestCase):
                 with self.assertRaises(ConfigError):
                     load_config(overrides={"connectors": connectors})
 
+    def test_calendar_busy_indicator_requires_calendar_and_a_safe_endpoint(self) -> None:
+        with self.assertRaisesRegex(ConfigError, "requires the Calendar connector"):
+            load_config(overrides={
+                "automations": {"calendar_busy_indicator": {"enabled": True}},
+            })
+        with self.assertRaisesRegex(ConfigError, "must not contain credentials"):
+            load_config(overrides={
+                "automations": {
+                    "calendar_busy_indicator": {
+                        "enabled": True,
+                        "host": "http://user:secret@127.0.0.1:8080/private",
+                    }
+                },
+                "connectors": {"calendar": {"enabled": True, "mode": "snapshot"}},
+            })
+
+    def test_remote_calendar_busy_indicator_requires_token_and_http_acceptance(self) -> None:
+        with tempfile.TemporaryDirectory() as folder, patch.dict(
+            os.environ,
+            {"FOUNDEROS_STATE_DIR": folder, "TEST_MATTER_TOKEN": "device-token"},
+            clear=False,
+        ):
+            overrides = {
+                "runtime": {"environment": "production"},
+                "automations": {
+                    "calendar_busy_indicator": {
+                        "enabled": True,
+                        "host": "http://192.0.2.20:8080",
+                        "api_token_env": "TEST_MATTER_TOKEN",
+                    }
+                },
+                "connectors": {
+                    "calendar": {
+                        "enabled": True,
+                        "mode": "snapshot",
+                        "snapshot_path": str(Path(folder) / "connectors" / "calendar.json"),
+                    }
+                },
+            }
+            with self.assertRaisesRegex(ConfigError, "allow_insecure_http"):
+                load_config(overrides=overrides)
+            overrides["automations"]["calendar_busy_indicator"]["allow_insecure_http"] = True
+            config = load_config(overrides=overrides)
+        self.assertTrue(config["automations"]["calendar_busy_indicator"]["enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

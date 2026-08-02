@@ -12,6 +12,7 @@ from threading import RLock
 from typing import Any, Mapping
 
 from founder_os.actions import ActionOutbox
+from founder_os.automation import BusyBarMatterTarget, CalendarBusyAutomation
 from founder_os.closure import ClosureEngine, ObligationLedger
 from founder_os.config import load_config
 from founder_os.connectors.registry import build_connectors
@@ -36,6 +37,7 @@ class RuntimeState:
     event_count: int
     connector_counts: Mapping[str, int]
     connector_health: Mapping[str, Mapping[str, Any]]
+    automation_health: Mapping[str, Mapping[str, Any]]
     displayed: bool
     display_error: str = ""
 
@@ -46,6 +48,7 @@ class FounderOSRuntime:
         config: Mapping[str, Any],
         *,
         display: Display | None = None,
+        busy_indicator: CalendarBusyAutomation | None = None,
         logger: logging.Logger | None = None,
     ) -> None:
         self.config = config
@@ -109,6 +112,39 @@ class FounderOSRuntime:
                 font_atlas_path=str(Path(__file__).resolve().parents[2] / "public" / "fonts" / "font-atlas.json"),
             )
         self.display = display
+        indicator_config = config["automations"]["calendar_busy_indicator"]
+        if busy_indicator is not None:
+            self.calendar_busy_automation = busy_indicator
+        elif bool(indicator_config["enabled"]):
+            indicator_host = str(indicator_config.get("host") or display_config["host"])
+            indicator_token_env = str(
+                indicator_config.get("api_token_env") or display_config.get("api_token_env") or ""
+            ).strip()
+            indicator_token = self.secrets.get(indicator_token_env) if indicator_token_env else ""
+            indicator_client = BusyBarDisplay(
+                indicator_host,
+                application_name="founderos-calendar-busy",
+                priority=1,
+                timeout=float(indicator_config["request_timeout_seconds"]),
+                api_token=indicator_token,
+                api_semver=str(indicator_config.get("api_semver") or display_config["api_semver"]),
+                text_rendering="native",
+            )
+            self.calendar_busy_automation = CalendarBusyAutomation(
+                BusyBarMatterTarget(
+                    indicator_client,
+                    require_pairing=bool(indicator_config["require_pairing"]),
+                ),
+                include_all_day=bool(indicator_config["include_all_day"]),
+                include_tentative=bool(indicator_config["include_tentative"]),
+                off_delay_seconds=float(indicator_config["off_delay_seconds"]),
+                verify_interval_seconds=float(indicator_config["verify_interval_seconds"]),
+                retry_seconds=float(indicator_config["retry_seconds"]),
+                retry_max_seconds=float(indicator_config["retry_max_seconds"]),
+                force_wait_seconds=float(indicator_config["force_wait_seconds"]),
+            )
+        else:
+            self.calendar_busy_automation = None
         self.validate_display_on_start = bool(display_config["validate_on_start"])
         self.expected_api_semver = str(display_config["api_semver"])
         self.tick_seconds = float(runtime_config["tick_seconds"])
@@ -204,6 +240,15 @@ class FounderOSRuntime:
         connector_counts = self.scheduler.poll_due(now, force=force_poll)
         self.bus.prune(now)
         source_events = self.bus.active(now)
+        connector_health = self.scheduler.health_snapshot()
+        automation_health: dict[str, Mapping[str, Any]] = {}
+        if self.calendar_busy_automation is not None:
+            automation_health[self.calendar_busy_automation.name] = self.calendar_busy_automation.reconcile(
+                source_events,
+                connector_health.get("calendar"),
+                now,
+                wait=force_poll,
+            )
         if self.closure_engine:
             closure_events = self.closure_engine.reconcile(source_events, now)
             system_events = self.closure_engine.system_events(source_events)
@@ -227,7 +272,8 @@ class FounderOSRuntime:
             selected=candidate,
             event_count=len(rankable_events),
             connector_counts=connector_counts,
-            connector_health=self.scheduler.health_snapshot(),
+            connector_health=connector_health,
+            automation_health=automation_health,
             displayed=displayed,
             display_error=error,
         )
@@ -236,6 +282,7 @@ class FounderOSRuntime:
                 selected_source=candidate.event.source if candidate else "",
                 event_count=state.event_count,
                 connector_health=state.connector_health,
+                automation_health=state.automation_health,
                 displayed=state.displayed,
                 display_error=state.display_error,
                 now=now,
@@ -275,6 +322,8 @@ class FounderOSRuntime:
     def close(self) -> None:
         if self.input_listener:
             self.input_listener.close()
+        if self.calendar_busy_automation:
+            self.calendar_busy_automation.close()
         self.scheduler.close()
         if self.closure_engine:
             self.closure_engine.close()

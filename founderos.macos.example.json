@@ -8,7 +8,8 @@
       "SLACK_BOT_TOKEN",
       "GOOGLE_CLIENT_ID",
       "GOOGLE_CLIENT_SECRET",
-      "GOOGLE_REFRESH_TOKEN"
+      "GOOGLE_REFRESH_TOKEN",
+      "BUSY_API_TOKEN"
     ]
   },
   "runtime": {
@@ -32,6 +33,19 @@
     "validate_on_start": true,
     "lease_seconds": 300,
     "text_rendering": "auto"
+  },
+  "automations": {
+    "calendar_busy_indicator": {
+      "enabled": false,
+      "mode": "busybar_matter",
+      "host": "",
+      "api_token_env": "BUSY_API_TOKEN",
+      "allow_insecure_http": false,
+      "require_pairing": true,
+      "include_all_day": false,
+      "include_tentative": true,
+      "off_delay_seconds": 15
+    }
   },
   "interaction": {
     "enabled": false
