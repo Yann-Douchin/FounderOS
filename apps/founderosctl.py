@@ -7,6 +7,7 @@ import argparse
 import getpass
 import json
 import os
+import secrets as token_secrets
 import shutil
 import subprocess
 import sys
@@ -568,6 +569,7 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
             else "BUSY Bar emulator LaunchAgent was not installed"
         )
         return 0
+    _ensure_interaction_secret(config)
     _preflight(config_path)
     state = state_root()
     deployment = stage_runtime_bundle(
@@ -624,6 +626,30 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
     print(f"FounderOS LaunchAgent installed: {destination}")
     print(f"FounderOS runtime deployed: {deployment.root}")
     return 0
+
+
+def _ensure_interaction_secret(config: dict) -> bool:
+    """Provision the local bridge secret without exposing it to argv or stdout."""
+    interaction = config.get("interaction", {})
+    if not bool(interaction.get("enabled")) or str(interaction.get("mode", "")).strip().lower() != "signed_http":
+        return False
+    account = str(interaction["secret_env"]).strip()
+    resolver = build_secret_resolver(config["secrets"])
+    if resolver.get(account):
+        return False
+    if str(config["secrets"].get("provider", "")).strip().lower() != "macos_keychain":
+        raise ServiceError(
+            f"signed input is enabled but {account} is missing from the configured secret provider"
+        )
+    allowed = {str(value).strip() for value in config["secrets"].get("accounts", [])}
+    if account not in allowed:
+        raise ServiceError(f"signed input secret account is not allowlisted: {account}")
+    store = keychain_store_from_config(config["secrets"])
+    store.set(account, token_secrets.token_urlsafe(32))
+    if not build_secret_resolver(config["secrets"]).get(account):
+        raise ServiceError("signed input secret could not be verified after provisioning")
+    print(f"{account}: generated in macOS Keychain")
+    return True
 
 
 def _configured_display(

@@ -6,6 +6,11 @@ from concurrent.futures import Future, ThreadPoolExecutor, TimeoutError as Futur
 from datetime import datetime, timedelta
 from typing import Any, Iterable, Mapping, Protocol
 
+from founder_os.automation.occupancy import (
+    MATTER_BUSY_STATES,
+    OccupancyLeaseCoordinator,
+    OccupancySnapshot,
+)
 from founder_os.display.busybar import BusyBarDisplay, DisplayError
 from founder_os.models import Event, parse_datetime
 
@@ -57,6 +62,9 @@ class CalendarBusyAutomation:
         retry_seconds: float = 5.0,
         retry_max_seconds: float = 60.0,
         force_wait_seconds: float = 15.0,
+        lease_min_ttl_seconds: float = 5.0,
+        lease_max_ttl_seconds: float = 28_800.0,
+        occupancy: OccupancyLeaseCoordinator | None = None,
     ) -> None:
         self.target = target
         self.include_all_day = bool(include_all_day)
@@ -66,10 +74,15 @@ class CalendarBusyAutomation:
         self.retry_seconds = max(1.0, float(retry_seconds))
         self.retry_max_seconds = max(self.retry_seconds, float(retry_max_seconds))
         self.force_wait_seconds = max(1.0, float(force_wait_seconds))
+        self.occupancy = occupancy or OccupancyLeaseCoordinator(
+            min_ttl_seconds=lease_min_ttl_seconds,
+            max_ttl_seconds=lease_max_ttl_seconds,
+        )
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="founderos-automation")
         self._future: Future[bool] | None = None
         self._future_desired: bool | None = None
         self._desired_busy: bool | None = None
+        self._desired_state: str | None = None
         self._desired_since: datetime | None = None
         self._applied_busy: bool | None = None
         self._last_success_at: datetime | None = None
@@ -79,6 +92,7 @@ class CalendarBusyAutomation:
         self._target_error = ""
         self._calendar_error = ""
         self._active_event_count = 0
+        self._presence = self.occupancy.snapshot()
         self._closed = False
 
     def reconcile(
@@ -95,23 +109,55 @@ class CalendarBusyAutomation:
         health = calendar_health or {}
         calendar_status = str(health.get("status") or "starting")
         has_snapshot = bool(health.get("last_success_at")) or calendar_status == "healthy"
-        authoritative = calendar_status == "healthy" or (calendar_status == "polling" and has_snapshot)
-        if not authoritative:
+        try:
+            failures = int(health.get("failures", 0))
+        except (TypeError, ValueError):
+            failures = 1
+        polling_is_clean = (
+            calendar_status == "polling"
+            and has_snapshot
+            and failures == 0
+            and not health.get("last_error")
+        )
+        authoritative = calendar_status == "healthy" or polling_is_clean
+        if authoritative:
+            self._calendar_error = ""
+            active = calendar_busy_events(
+                events,
+                now,
+                include_all_day=self.include_all_day,
+                include_tentative=self.include_tentative,
+            )
+            self._active_event_count = len(active)
+            self.occupancy.set_calendar_busy(bool(active))
+        else:
             self._calendar_error = (
                 "" if calendar_status in {"starting", "polling"}
                 else f"Calendar source is {calendar_status}"
             )
-            return self.snapshot(status="starting" if not has_snapshot else "degraded")
-        self._calendar_error = ""
+        presence = self.occupancy.snapshot(now)
+        previous_state = self._desired_state
+        self._desired_state = presence.state
+        self._presence = presence
 
-        active = calendar_busy_events(
-            events,
-            now,
-            include_all_day=self.include_all_day,
-            include_tentative=self.include_tentative,
+        # An unknown Calendar source must not advertise availability. A local
+        # busy lease may still turn the indicator on, and may later undo only
+        # the busy state that it established itself.
+        local_busy_was_applied = (
+            previous_state in MATTER_BUSY_STATES - {"meeting"}
+            and self._applied_busy is True
         )
-        desired = bool(active)
-        self._active_event_count = len(active)
+        pending_owned_off = self._desired_busy is False and self._applied_busy is True
+        desired_is_authoritative = (
+            presence.calendar_known
+            or presence.busy
+            or local_busy_was_applied
+            or pending_owned_off
+        )
+        if not desired_is_authoritative:
+            return self.snapshot(status="starting" if not has_snapshot else "degraded")
+
+        desired = presence.busy
         if desired != self._desired_busy:
             self._desired_busy = desired
             self._desired_since = now
@@ -125,7 +171,7 @@ class CalendarBusyAutomation:
         ):
             effective_desired = True
 
-        verification_due = (
+        verification_due = authoritative and (
             self._last_verified_at is None
             or now - self._last_verified_at >= self.verify_interval
         )
@@ -145,7 +191,11 @@ class CalendarBusyAutomation:
                 pass
             self._harvest(now)
 
-        if self._calendar_error or self._target_error:
+        if self._target_error:
+            status = "degraded"
+        elif not authoritative:
+            status = "starting" if not has_snapshot else "degraded"
+        elif self._calendar_error:
             status = "degraded"
         elif self._last_success_at is None:
             status = "starting"
@@ -158,8 +208,11 @@ class CalendarBusyAutomation:
             "status": status,
             "critical": True,
             "desired_busy": self._desired_busy,
+            "presence_state": self._presence.state,
             "applied_busy": self._applied_busy,
             "active_event_count": self._active_event_count,
+            "active_lease_count": self._presence.active_lease_count,
+            "calendar_known": self._presence.calendar_known,
             "last_success_at": self._last_success_at.isoformat() if self._last_success_at else None,
             "last_error": self._calendar_error or self._target_error,
         }

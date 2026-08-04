@@ -254,6 +254,98 @@ class RuntimeTests(unittest.TestCase):
             finally:
                 runtime.close()
 
+    def test_input_context_exposes_only_semantic_capabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={"memory": {"path": str(Path(folder) / "memory.json")}}
+            )
+            runtime = FounderOSRuntime(config, display=RecordingDisplay())
+            event = Event(
+                source="linear",
+                id="linear:private-issue",
+                title="Décision client confidentielle",
+                url="https://linear.app/acme/issue/ABC-1",
+                occurred_at=NOW,
+            )
+            runtime.bus.publish(event)
+            try:
+                runtime.tick(NOW, force_poll=True)
+                context = runtime._input_context()
+            finally:
+                runtime.close()
+        self.assertEqual(context["bridge_version"], 2)
+        self.assertEqual(context["capabilities"], [
+            "event.acknowledge",
+            "event.open",
+            "event.snooze",
+            "presence.acquire",
+            "presence.release",
+            "presence.release_all",
+            "presence.renew",
+        ])
+        self.assertEqual(context["presence"]["allowed_states"], [
+            "focus",
+            "manual_call",
+            "recording",
+        ])
+        serialized = str(context)
+        self.assertNotIn(event.title, serialized)
+        self.assertNotIn(event.url, serialized)
+
+    def test_permission_context_uses_the_frozen_v2_wire_capabilities(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={"memory": {"path": str(Path(folder) / "memory.json")}}
+            )
+            runtime = FounderOSRuntime(config, display=RecordingDisplay())
+            permission = RankedEvent(
+                Event(
+                    source="chatgpt_codex",
+                    id="codex:permission",
+                    title="Autoriser ?",
+                    kind="permission_request",
+                    metadata={"request_id": "abcdef123456"},
+                ),
+                200,
+                {},
+            )
+            try:
+                runtime._render(permission, NOW)
+                context = runtime._input_context()
+            finally:
+                runtime.close()
+        self.assertEqual(context["capabilities"], [
+            "permission.allow",
+            "permission.deny",
+            "presence.acquire",
+            "presence.release",
+            "presence.release_all",
+            "presence.renew",
+        ])
+
+    def test_presence_commands_are_source_scoped_and_release_all_preserves_calendar(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            config = load_config(
+                overrides={"memory": {"path": str(Path(folder) / "memory.json")}}
+            )
+            runtime = FounderOSRuntime(config, display=RecordingDisplay())
+            try:
+                runtime.occupancy.set_calendar_busy(True)
+                acquired = runtime._handle_presence_command({
+                    "action": "acquire",
+                    "lease_id": "streamdeck.recording",
+                    "state": "recording",
+                    "ttl_seconds": 60,
+                })
+                released = runtime._handle_presence_command({"action": "release_all"})
+                aggregate = runtime.occupancy.snapshot()
+            finally:
+                runtime.close()
+        self.assertEqual(acquired["aggregate"]["state"], "recording")
+        self.assertEqual(released["released_count"], 1)
+        self.assertEqual(aggregate.state, "meeting")
+        self.assertTrue(aggregate.calendar_busy)
+
     def test_layout_transition_clears_merged_hardware_elements(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             config = load_config(overrides={"memory": {"path": str(Path(folder) / "memory.json")}})

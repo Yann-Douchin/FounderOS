@@ -11,8 +11,12 @@ from pathlib import Path
 from threading import RLock
 from typing import Any, Mapping
 
-from founder_os.actions import ActionOutbox
-from founder_os.automation import BusyBarMatterTarget, CalendarBusyAutomation
+from founder_os.actions import ActionOutbox, ActionOutboxConsumer, is_safe_open_url
+from founder_os.automation import (
+    BusyBarMatterTarget,
+    CalendarBusyAutomation,
+    OccupancyLeaseCoordinator,
+)
 from founder_os.closure import ClosureEngine, ObligationLedger
 from founder_os.config import load_config
 from founder_os.connectors.registry import build_connectors
@@ -22,7 +26,14 @@ from founder_os.core.scheduler import Scheduler
 from founder_os.display.busybar import BusyBarDisplay, Display, DisplayConflict, DisplayError
 from founder_os.display.layouts import event_layout, idle_layout
 from founder_os.health import HealthReporter
-from founder_os.interaction import EmulatorInputListener, InputEvent, SignedInputListener
+from founder_os.interaction import (
+    BRIDGE_CAPABILITIES,
+    BRIDGE_VERSION,
+    EmulatorInputListener,
+    InputEvent,
+    LocalInputListener,
+    SignedInputListener,
+)
 from founder_os.models import RankedEvent, utc_now
 from founder_os.paths import state_root
 from founder_os.ranking.deterministic import DeterministicRanker
@@ -113,8 +124,14 @@ class FounderOSRuntime:
             )
         self.display = display
         indicator_config = config["automations"]["calendar_busy_indicator"]
+        self.presence_output_enabled = bool(indicator_config["enabled"])
+        occupancy = OccupancyLeaseCoordinator(
+            min_ttl_seconds=float(indicator_config["lease_min_ttl_seconds"]),
+            max_ttl_seconds=float(indicator_config["lease_max_ttl_seconds"]),
+        )
         if busy_indicator is not None:
             self.calendar_busy_automation = busy_indicator
+            self.occupancy = getattr(busy_indicator, "occupancy", occupancy)
         elif bool(indicator_config["enabled"]):
             indicator_host = str(indicator_config.get("host") or display_config["host"])
             indicator_token_env = str(
@@ -142,9 +159,14 @@ class FounderOSRuntime:
                 retry_seconds=float(indicator_config["retry_seconds"]),
                 retry_max_seconds=float(indicator_config["retry_max_seconds"]),
                 force_wait_seconds=float(indicator_config["force_wait_seconds"]),
+                lease_min_ttl_seconds=float(indicator_config["lease_min_ttl_seconds"]),
+                lease_max_ttl_seconds=float(indicator_config["lease_max_ttl_seconds"]),
+                occupancy=occupancy,
             )
+            self.occupancy = occupancy
         else:
             self.calendar_busy_automation = None
+            self.occupancy = occupancy
         self.validate_display_on_start = bool(display_config["validate_on_start"])
         self.expected_api_semver = str(display_config["api_semver"])
         self.tick_seconds = float(runtime_config["tick_seconds"])
@@ -170,7 +192,21 @@ class FounderOSRuntime:
             str(interaction_config["action_outbox_path"]),
             max_pending=int(interaction_config["action_outbox_max_pending"]),
         )
+        self.action_consumer: ActionOutboxConsumer | None = None
+        if (
+            bool(interaction_config["enabled"])
+            and str(interaction_config["mode"]).strip().lower() == "signed_http"
+            and bool(interaction_config["action_consumer_enabled"])
+        ):
+            self.action_consumer = ActionOutboxConsumer(
+                str(interaction_config["action_outbox_path"]),
+                poll_seconds=float(interaction_config["action_consumer_poll_seconds"]),
+                max_history=int(interaction_config["action_consumer_max_history"]),
+                max_age_seconds=float(interaction_config["action_consumer_max_age_seconds"]),
+                logger=self.log,
+            )
         self.input_listener: EmulatorInputListener | SignedInputListener | None = None
+        self.local_input_listener: LocalInputListener | None = None
         if bool(interaction_config["enabled"]):
             mode = str(interaction_config["mode"]).strip().lower()
             if mode == "emulator_sse":
@@ -196,6 +232,26 @@ class FounderOSRuntime:
                     secret,
                     self.handle_input,
                     self._input_context,
+                    presence_callback=self._handle_presence_command if self.occupancy else None,
+                    max_clock_skew_seconds=float(interaction_config["max_clock_skew_seconds"]),
+                    logger=self.log,
+                )
+                socket_path = (
+                    Path(str(interaction_config["action_outbox_path"])).expanduser().resolve().parent
+                    / "founderos-input.sock"
+                )
+                self.local_input_listener = LocalInputListener(
+                    socket_path,
+                    self.handle_input,
+                    self._input_context,
+                    presence_callback=self._handle_presence_command if self.occupancy else None,
+                    allowed_keys={
+                        self.allow_key,
+                        self.deny_key,
+                        self.acknowledge_key,
+                        self.snooze_key,
+                        self.open_key,
+                    },
                     max_clock_skew_seconds=float(interaction_config["max_clock_skew_seconds"]),
                     logger=self.log,
                 )
@@ -295,9 +351,15 @@ class FounderOSRuntime:
         self.log.info("FounderOS started with %d connector(s)", len(self.connectors))
         try:
             self.validate_display()
+            if self.action_consumer:
+                self.action_consumer.start()
+                self.log.info("trusted open action consumer enabled")
             if self.input_listener:
                 self.input_listener.start()
                 self.log.info("input adapter enabled: %s", type(self.input_listener).__name__)
+            if self.local_input_listener:
+                self.local_input_listener.start()
+                self.log.info("private local input adapter enabled")
             while not self._stop:
                 self.tick()
                 time.sleep(self.tick_seconds)
@@ -320,8 +382,12 @@ class FounderOSRuntime:
         self._stop = True
 
     def close(self) -> None:
+        if self.local_input_listener:
+            self.local_input_listener.close()
         if self.input_listener:
             self.input_listener.close()
+        if self.action_consumer:
+            self.action_consumer.close()
         if self.calendar_busy_automation:
             self.calendar_busy_automation.close()
         self.scheduler.close()
@@ -409,14 +475,108 @@ class FounderOSRuntime:
 
     def _input_context(self) -> Mapping[str, Any]:
         with self._state_lock:
-            if self._selected is None or self._displayed_event_id != self._selected.event.id:
-                return {"event_id": "", "request_id": "", "kind": ""}
-            event = self._selected.event
-            return {
-                "event_id": event.id,
-                "request_id": str(event.metadata.get("request_id", "")),
-                "kind": event.kind,
+            visible = bool(
+                self._selected is not None
+                and self._displayed_event_id == self._selected.event.id
+            )
+            event = self._selected.event if visible and self._selected is not None else None
+            capabilities: list[str] = []
+            if event is not None and event.kind == "permission_request":
+                capabilities.extend(
+                    (BRIDGE_CAPABILITIES["allow"], BRIDGE_CAPABILITIES["deny"])
+                )
+            elif event is not None and event.kind != "connector_health":
+                capabilities.extend(
+                    (
+                        BRIDGE_CAPABILITIES["acknowledge"],
+                        BRIDGE_CAPABILITIES["snooze"],
+                    )
+                )
+                if is_safe_open_url(event.url):
+                    capabilities.append(BRIDGE_CAPABILITIES["open"])
+            context: dict[str, Any] = {
+                "bridge_version": BRIDGE_VERSION,
+                "event_id": event.id if event else "",
+                "request_id": str(event.metadata.get("request_id", "")) if event else "",
+                "kind": event.kind if event else "",
             }
+            if self.occupancy is not None:
+                capabilities.extend(
+                    (
+                        BRIDGE_CAPABILITIES["presence_acquire"],
+                        BRIDGE_CAPABILITIES["presence_renew"],
+                        BRIDGE_CAPABILITIES["presence_release"],
+                        BRIDGE_CAPABILITIES["presence_release_all"],
+                    )
+                )
+                presence = self.occupancy.snapshot().public_dict()
+                presence.update(
+                    {
+                        "allowed_states": ["focus", "manual_call", "recording"],
+                        "min_ttl_seconds": self.occupancy.min_ttl_seconds,
+                        "max_ttl_seconds": self.occupancy.max_ttl_seconds,
+                        "matter_output_enabled": self.presence_output_enabled,
+                    }
+                )
+                context["presence"] = presence
+            context["capabilities"] = sorted(capabilities)
+            return context
+
+    def _handle_presence_command(self, command: Mapping[str, Any]) -> Mapping[str, Any]:
+        if self.occupancy is None:
+            raise ValueError("presence automation is unavailable")
+        action = str(command.get("action", ""))
+        lease_id = str(command.get("lease_id", ""))
+        now = utc_now()
+        if action == "acquire":
+            lease = self.occupancy.acquire(
+                lease_id,
+                str(command.get("state", "")),
+                command.get("ttl_seconds", 0),
+                source="stream_deck",
+                now=now,
+            )
+            result: dict[str, Any] = {
+                "action": action,
+                "lease_id": lease.lease_id,
+                "state": lease.state,
+                "expires_at": lease.expires_at.isoformat(),
+            }
+        elif action == "renew":
+            lease = self.occupancy.renew(
+                lease_id,
+                command.get("ttl_seconds", 0),
+                source="stream_deck",
+                now=now,
+            )
+            result = {
+                "action": action,
+                "lease_id": lease.lease_id,
+                "state": lease.state,
+                "expires_at": lease.expires_at.isoformat(),
+            }
+        elif action == "release":
+            result = {
+                "action": action,
+                "lease_id": lease_id,
+                "released": self.occupancy.release(
+                    lease_id,
+                    source="stream_deck",
+                    now=now,
+                ),
+            }
+        elif action == "release_all":
+            result = {
+                "action": action,
+                "released_count": self.occupancy.release_all(
+                    source="stream_deck",
+                    now=now,
+                ),
+            }
+        else:
+            raise ValueError("unsupported presence action")
+        result["aggregate"] = self.occupancy.snapshot(now).public_dict()
+        return result
 
     def _respect_hold(
         self,

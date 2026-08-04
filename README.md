@@ -14,7 +14,7 @@
 </p>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/FounderOS-0.3.0-7C5CFC" alt="FounderOS" />
+  <img src="https://img.shields.io/badge/FounderOS-0.4.0-7C5CFC" alt="FounderOS" />
   <img src="https://img.shields.io/badge/API-25.0.0-2B7FFF" alt="API" />
   <img src="https://img.shields.io/badge/web%20UI-Vue%203-42b883" alt="Vue 3" />
   <img src="https://img.shields.io/badge/server-Node%2020.9%2B%20%2B%20Sharp-339933" alt="Server" />
@@ -81,7 +81,7 @@ FounderOS includes:
 - Linear, Slack, Gmail, Google Calendar, LinkedIn bridge, Claude, ChatGPT/Codex, Notion, Drive, Sheets, GitHub, deployment, Sentry, PostHog, Shopify, Superhuman reminder, Stripe, and Home Assistant connectors;
 - governed Linear portfolio scope with bounded pagination and project-risk rollups;
 - deterministic Gmail incoming-action and outgoing-promise classification, bounded Slack thread signals, and Calendar before/after meeting transitions;
-- a governed Calendar occupancy output that publishes busy state through the BUSY Bar Matter switch without blocking the 72x16 display;
+- a governed multi-source presence output that combines Calendar with expiring focus, call, and recording leases, then publishes one state through the BUSY Bar Matter switch without blocking the 72x16 display;
 - operational false-ready gates, scoped evidence quorum, capacity and handoff checks, burst compaction, and source-priority normalization;
 - a local-only emulator Obligations tab plus audited CLI corrections for state, owner, next action, delegation, gates, evidence, and relationship cooling;
 - additional production connectors disabled by default until their narrow credentials and entity mappings are configured;
@@ -102,7 +102,7 @@ python3 apps/founderos.py --demo --dry-run --once --explain --frame-json
 npm test
 ```
 
-See [FounderOS architecture](docs/founderos/ARCHITECTURE.md), [configuration](docs/founderos/CONFIGURATION.md), and the [gallery capture checklist](docs/founderos/GALLERY.md).
+See [FounderOS architecture](docs/founderos/ARCHITECTURE.md), [configuration](docs/founderos/CONFIGURATION.md), the [Stream Deck setup](docs/founderos/STREAM-DECK-SETUP.md), and the [gallery capture checklist](docs/founderos/GALLERY.md).
 
 ### Governed obligations
 
@@ -118,11 +118,11 @@ python3 apps/founderosctl.py --config founderos.autonomous.local.json relationsh
 
 See the [founder workflow closure program](docs/founderos/WORKFLOW-ROADMAP.md) for the shipped controls and the remaining deployment-specific activation gates.
 
-### Calendar busy indicator through Matter
+### Governed presence indicator through Matter
 
-FounderOS can publish the current Google Calendar occupancy state to the BUSY Bar Matter switch. A Matter controller such as Apple Home, Google Home, or Home Assistant then maps switch `ON` to a red Hue office light and switch `OFF` to the light being off. This does not start a BUSY timer, so FounderOS retains the 72x16 canvas.
+FounderOS combines Google Calendar with authenticated, expiring `focus`, `manual_call`, and `recording` leases. The fixed priority is `recording > meeting > manual_call > focus > available`. A Matter controller such as Apple Home, Google Home, or Home Assistant maps busy switch `ON` to a red Hue office light and `OFF` to the light being off. `focus` remains a local state and does not turn the red indicator on. This does not start a BUSY timer, so FounderOS retains the 72x16 canvas.
 
-Home Assistant is optional. If the BUSY Bar and Hue light are already available in Apple Home, two Apple Home automations are sufficient. See the [Matter indicator setup](docs/founderos/CONFIGURATION.md#calendar-busy-indicator-through-busy-bar-matter).
+Home Assistant is optional. If the BUSY Bar and Hue light are already available in Apple Home, two Apple Home automations are sufficient. See the [Matter indicator setup](docs/founderos/CONFIGURATION.md#multi-source-presence-indicator-through-busy-bar-matter).
 
 ### Autonomous macOS service
 
@@ -149,7 +149,7 @@ python3 apps/founderosctl.py --config founderos.autonomous.local.json service in
 python3 apps/founderosctl.py --config founderos.autonomous.local.json service status
 ```
 
-Secrets stay in the macOS Keychain. They are never written to the plist, configuration, process arguments, heartbeat, or logs. The emulator listens on `127.0.0.1` by default and keeps its private state outside the checkout. Installation succeeds only after the new FounderOS process publishes a heartbeat with the same PID reported by launchd, a healthy display, and healthy connectors. Use `service install --skip-emulator` when the configured display is physical hardware. Full provisioning and recovery details are in [configuration](docs/founderos/CONFIGURATION.md#autonomous-macos-deployment).
+Secrets stay in the macOS Keychain. They are never written to the plist, configuration, process arguments, heartbeat, or logs. When signed local interaction is enabled and its allowlisted Keychain entry is absent, `service install` generates the bridge secret directly in the Keychain without printing it. The emulator listens on `127.0.0.1` by default and keeps its private state outside the checkout. Installation succeeds only after the new FounderOS process publishes a heartbeat with the same PID reported by launchd, a healthy display, and healthy connectors. Use `service install --skip-emulator` when the configured display is physical hardware. Full provisioning and recovery details are in [configuration](docs/founderos/CONFIGURATION.md#autonomous-macos-deployment).
 
 The project-local Claude and Codex hooks are already tracked. Enable both agent connectors in your local configuration, then run FounderOS:
 
@@ -157,7 +157,7 @@ The project-local Claude and Codex hooks are already tracked. Enable both agent 
 python3 apps/founderos.py --config founderos.local.json
 ```
 
-Emulator SSE is intentionally untrusted and cannot approve anything. Production input uses the loopback HMAC bridge in `apps/founderos_input.py`, bound to the exact selected event and request. Codex users must review the project hook with `/hooks` before its first use. See [Claude and ChatGPT/Codex configuration](docs/founderos/CONFIGURATION.md#claude-and-chatgptcodex) and the [production closure register](docs/founderos/PRODUCTION-CLOSURE.md).
+Emulator SSE is intentionally untrusted and cannot approve anything. Production input is bound to the exact selected event and request. Same-account desktop clients use a private Unix socket without copying the signing secret, while other local adapters use the loopback HMAC bridge in `apps/founderos_input.py`. Codex users must review the project hook with `/hooks` before its first use. See [Claude and ChatGPT/Codex configuration](docs/founderos/CONFIGURATION.md#claude-and-chatgptcodex) and the [production closure register](docs/founderos/PRODUCTION-CLOSURE.md).
 
 The prioritized product direction based on real founder workflows is documented in the [workflow roadmap](docs/founderos/WORKFLOW-ROADMAP.md).
 The hardware behavior observed through BarPilot is pinned and governed in the [BarPilot compatibility profile](docs/founderos/BARPILOT-COMPATIBILITY.md).

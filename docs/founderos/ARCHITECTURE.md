@@ -28,23 +28,24 @@ Linear  Slack  Gmail  Calendar  Notion  Drive  Sheets  GitHub  Observability
 
 Connectors import no display code. The display layer imports no connector code. The runtime is the only composition root.
 
-Calendar occupancy also feeds one governed output sidecar:
+Calendar occupancy and authenticated local work modes feed one governed output sidecar:
 
 ```text
-normalized Calendar events + Calendar health
-                    |
-       deterministic occupancy policy
-                    |
-     BUSY Bar smart-home switch API
-                    |
-          commissioned Matter fabric
-                    |
-       controller rule to Hue light
+normalized Calendar events + Calendar health    signed local leases with TTL
+                         \                         /
+                          deterministic coordinator
+                 recording > meeting > manual_call > focus > available
+                                      |
+                         BUSY Bar smart-home switch API
+                                      |
+                           commissioned Matter fabric
+                                      |
+                            controller rule to Hue light
 ```
 
-This sidecar does not bypass the connector contract. The Calendar connector still emits normalized events only, and the runtime supplies those observations to the automation. The output never starts a BUSY timer or draws to the display. It changes the BUSY Bar Matter switch, while Apple Home, Google Home, or Home Assistant owns the device-to-device mapping. Automation health is reported separately from connector health and display health.
+This sidecar does not bypass the connector contract. The Calendar connector still emits normalized events only, and the runtime supplies those observations to the automation. Local leases can request only `focus`, `manual_call`, or `recording`. The reserved `meeting` state belongs to Calendar. The output never starts a BUSY timer or draws to the display. It changes the BUSY Bar Matter switch, while Apple Home, Google Home, or Home Assistant owns the device-to-device mapping. Automation health is reported separately from connector health and display health.
 
-The policy excludes cancelled, declined, and transparent meetings, applies explicit tentative and all-day settings, confirms every state transition, and retries with bounded backoff. If Calendar becomes stale, it holds the last applied state rather than emitting a false available signal. The supervised runtime restarts after failure and reconciles the switch on recovery.
+The policy excludes cancelled, declined, and transparent meetings, applies explicit tentative and all-day settings, confirms every switch transition, and retries with bounded backoff. If Calendar becomes stale, it holds the last Calendar state rather than emitting a false available signal. Releasing a recording or manual-call lease can therefore never clear an active or retained meeting. `focus` remains visible to local clients but does not activate the red Matter indicator. The supervised runtime restarts after failure and reconciles the switch on recovery.
 
 Authorized Codex app connectors can also feed the same contract through private, expiring JSON snapshots. This bridge keeps OAuth credentials out of the FounderOS process and lets the project move from gallery fixtures to real data one source at a time. Direct API polling remains the autonomous deployment path.
 
@@ -146,9 +147,13 @@ The renderer also chooses one of six governed animated 8 by 8 states from event 
 
 Permission and agent-usage events use dedicated layouts. A permission request pulses its accent, shows a countdown, and reserves red and green answer rails. A usage event renders up to two deterministic quota bars. These layouts use only standard text and rectangle elements.
 
-Emulator SSE input is explicitly untrusted. The production adapter is a loopback HMAC endpoint that binds every key to the exact selected event and request, checks freshness, and rejects nonce replay. A physical transport must implement this contract because the display HTTP API has no documented outbound button stream.
+Emulator SSE input is explicitly untrusted. Production adapters use either a loopback HMAC endpoint or a private same-account Unix socket. Both bind every key to the exact selected event and request, check freshness, and reject nonce replay. A physical transport must implement this contract because the display HTTP API has no documented outbound button stream.
 
-Trusted context is published only after the display confirms that exact event. It is removed before redraws, conflicts, and actions, so an invisible event cannot be acknowledged or approved.
+Trusted context is published only after the display confirms that exact event. It is removed before redraws, conflicts, and actions, so an invisible event cannot be acknowledged or approved. Bridge version 2 adds content-free semantic capabilities and the aggregate presence state. It does not expose the selected title, URL, message body, lease identifiers, or owner names.
+
+The same bridge contract accepts bounded presence leases over either local transport. Each request carries a fresh timestamp and one-use nonce. A source may renew or release only its own lease. `release_all` is scoped to Stream Deck leases and cannot mutate Calendar state.
+
+Trusted `open` actions enter a private atomic outbox. A separate consumer claims each record before invoking `/usr/bin/open`, validates the URL again, and writes a content-free audit record. A crash after claiming is treated as indeterminate and is never replayed automatically.
 
 ## Package map
 
@@ -159,6 +164,7 @@ founder_os/
   core/         event bus, scheduler, priority engine, runtime
   ranking/      deterministic scorer, persistent memory, optional LLM
   display/      BUSY Bar HTTP client, layouts, frame sequences
+  automation/   Calendar state, expiring occupancy leases, Matter output
 apps/
   founderos.py  emulator and hardware entry point
 tests/          contracts, ranking, connector fixtures, runtime

@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from apps import founderosctl
+from apps import founderos_input, founderosctl
 from founder_os.connectors.base import ConnectorConfigurationError
 from founder_os.connectors.linear_oauth import LinearAccessTokenProvider
 from founder_os.health import HealthReporter
@@ -145,6 +145,82 @@ class AutonomousServiceTests(unittest.TestCase):
             environ={"SLACK_BOT_TOKEN": "ambient-token"},
         )
         self.assertEqual(resolver.get("SLACK_BOT_TOKEN"), "")
+
+    def test_service_install_generates_a_missing_bridge_secret_without_printing_it(self) -> None:
+        account = "FOUNDEROS_INPUT_SECRET"
+        store = MemorySecretStore(accounts=[account])
+        resolver = SecretResolver(store, accounts=[account], environ={})
+        config = {
+            "interaction": {
+                "enabled": True,
+                "mode": "signed_http",
+                "secret_env": account,
+            },
+            "secrets": {
+                "provider": "macos_keychain",
+                "accounts": [account],
+            },
+        }
+        with patch.object(founderosctl, "build_secret_resolver", return_value=resolver), patch.object(
+            founderosctl,
+            "keychain_store_from_config",
+            return_value=store,
+        ), patch.object(
+            founderosctl.token_secrets,
+            "token_urlsafe",
+            return_value="generated-bridge-secret-0123456789abcdef",
+        ), patch("builtins.print") as output:
+            self.assertTrue(founderosctl._ensure_interaction_secret(config))
+            self.assertFalse(founderosctl._ensure_interaction_secret(config))
+        self.assertEqual(store.get(account), "generated-bridge-secret-0123456789abcdef")
+        rendered = " ".join(str(value) for call in output.call_args_list for value in call.args)
+        self.assertIn(account, rendered)
+        self.assertNotIn(store.get(account), rendered)
+
+    def test_reference_input_client_reads_the_bridge_secret_from_keychain(self) -> None:
+        account = "FOUNDEROS_INPUT_SECRET"
+        store = MemorySecretStore({account: "keychain-bridge-secret"}, accounts=[account])
+        resolver = SecretResolver(store, accounts=[account], environ={})
+        config = {
+            "interaction": {"secret_env": account},
+            "secrets": {"provider": "macos_keychain", "accounts": [account]},
+        }
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "founder_os.config.load_config",
+            return_value=config,
+        ), patch(
+            "founder_os.secrets.build_secret_resolver",
+            return_value=resolver,
+        ):
+            value = founderos_input.resolve_secret("founderos.test.json", account)
+        self.assertEqual(value, "keychain-bridge-secret")
+
+    def test_reference_input_client_does_not_override_keychain_with_ambient_secret(self) -> None:
+        account = "FOUNDEROS_INPUT_SECRET"
+        store = MemorySecretStore({account: "keychain-bridge-secret"}, accounts=[account])
+        resolver = SecretResolver(store, accounts=[account], environ={account: "ambient-secret"})
+        config = {
+            "interaction": {"secret_env": account},
+            "secrets": {"provider": "macos_keychain", "accounts": [account]},
+        }
+        with patch.dict(os.environ, {account: "ambient-secret"}, clear=True), patch(
+            "founder_os.config.load_config",
+            return_value=config,
+        ), patch(
+            "founder_os.secrets.build_secret_resolver",
+            return_value=resolver,
+        ):
+            value = founderos_input.resolve_secret("founderos.test.json", account)
+        self.assertEqual(value, "keychain-bridge-secret")
+
+    def test_reference_input_client_fails_closed_for_an_invalid_existing_config(self) -> None:
+        account = "FOUNDEROS_INPUT_SECRET"
+        with tempfile.TemporaryDirectory() as folder:
+            config_path = Path(folder) / "invalid.json"
+            config_path.write_text("{invalid", encoding="utf-8")
+            with patch.dict(os.environ, {account: "ambient-secret"}, clear=True):
+                value = founderos_input.resolve_secret(str(config_path), account)
+        self.assertEqual(value, "")
 
     def test_linear_refresh_rotates_and_persists_before_returning_access(self) -> None:
         store = MemorySecretStore({
@@ -703,6 +779,59 @@ class AutonomousServiceTests(unittest.TestCase):
         self.assertTrue(status.display_healthy)
         self.assertFalse(status.connectors_healthy)
         self.assertFalse(status.automations_healthy)
+
+    def test_service_status_keeps_a_successful_connector_healthy_while_polling(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            health = Path(folder) / "health.json"
+            health.write_text(json.dumps({
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "status": "running",
+                "pid": 222,
+                "display": {"healthy": True},
+                "connectors": {
+                    "linear": {
+                        "status": "polling",
+                        "critical": True,
+                        "failures": 0,
+                        "last_success_at": NOW.isoformat(),
+                        "error_present": False,
+                    },
+                    "slack": {"status": "healthy", "critical": True},
+                },
+                "automations": {},
+            }), encoding="utf-8")
+            with patch(
+                "founder_os.service.launch_agent_status",
+                return_value=LaunchAgentStatus(True, 222, "running"),
+            ):
+                status = service_status(health_path=health)
+        self.assertTrue(status.connectors_healthy)
+
+    def test_service_status_rejects_a_first_poll_without_prior_success(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            health = Path(folder) / "health.json"
+            health.write_text(json.dumps({
+                "generated_at": datetime.now(timezone.utc).isoformat(),
+                "status": "running",
+                "pid": 222,
+                "display": {"healthy": True},
+                "connectors": {
+                    "linear": {
+                        "status": "polling",
+                        "critical": True,
+                        "failures": 0,
+                        "last_success_at": None,
+                        "error_present": False,
+                    },
+                },
+                "automations": {},
+            }), encoding="utf-8")
+            with patch(
+                "founder_os.service.launch_agent_status",
+                return_value=LaunchAgentStatus(True, 222, "running"),
+            ):
+                status = service_status(health_path=health)
+        self.assertFalse(status.connectors_healthy)
 
 
 if __name__ == "__main__":

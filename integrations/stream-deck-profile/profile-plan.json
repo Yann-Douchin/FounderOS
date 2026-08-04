@@ -1,0 +1,78 @@
+{
+  "schemaVersion": 1,
+  "minimumStreamDeckVersion": "7.1",
+  "targetStreamDeckVersion": "7.5.1",
+  "deviceModels": {
+    "streamDeckPlus": "20GBD9901",
+    "pedal": "20GBF9901",
+    "mobile": "VSD/WiFi"
+  },
+  "profiles": {
+    "cockpit": {
+      "device": "streamDeckPlus",
+      "name": "FounderOS Cockpit",
+      "keys": [
+        ["Open priority", "Snooze 15 min", "Acknowledge, hold", "Focus 50"],
+        ["Capture", "Prepare call", "Studio", "Finish, hold"]
+      ],
+      "dials": [
+        "Volume and output",
+        "Yeti X gain and mute",
+        "Task lighting",
+        "Modes"
+      ]
+    },
+    "call": {
+      "device": "streamDeckPlus",
+      "name": "FounderOS Call",
+      "keys": [
+        ["Microphone", "Camera tracking", "ScreenBrush", "Notes"],
+        ["Lights", "Prompter", "Priority", "End, hold"]
+      ]
+    },
+    "studio": {
+      "device": "streamDeckPlus",
+      "name": "FounderOS Studio",
+      "keys": [
+        ["Prepare", "Start REC, hold", "Pause", "OBS capture"],
+        ["ScreenBrush", "Camera tracking", "Prompter", "End, hold"]
+      ]
+    },
+    "pedal": {
+      "device": "pedal",
+      "name": "FounderOS Pedal",
+      "keys": [["Voice", "Capture", "Visual"]]
+    },
+    "presentation": {
+      "device": "mobile",
+      "name": "FounderOS Presentation",
+      "keys": [
+        ["Previous slide", "Next slide", "Prompter play / pause"],
+        ["Speed -", "Speed +", "ScreenBrush"]
+      ]
+    }
+  },
+  "ownership": {
+    "founderOS": [
+      "priority and obligations",
+      "permissions",
+      "busy state",
+      "Desk Recording Indicator",
+      "focus, manual call, and recording leases"
+    ],
+    "streamDeck": [
+      "actions on the displayed priority",
+      "audio",
+      "task lighting",
+      "camera",
+      "Prompter",
+      "OBS",
+      "profile transitions"
+    ]
+  },
+  "forbiddenActionTitlePatterns": [
+    "Desk Recording Indicator",
+    "Video Recording Indicator",
+    "Recording Indicator"
+  ]
+}

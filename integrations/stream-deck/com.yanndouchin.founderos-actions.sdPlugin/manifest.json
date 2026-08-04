@@ -1,0 +1,147 @@
+{
+  "$schema": "https://schemas.elgato.com/streamdeck/plugins/manifest.json",
+  "Name": "FounderOS Actions",
+  "Version": "1.0.0.0",
+  "Author": "Yann Douchin",
+  "Actions": [
+    {
+      "Name": "FounderOS Status",
+      "UUID": "com.yanndouchin.founderos-actions.status",
+      "Icon": "imgs/actions/status/action",
+      "Tooltip": "Shows only the connection, context type, and available capabilities.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/status/key",
+          "Title": "FounderOS",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Open priority",
+      "UUID": "com.yanndouchin.founderos-actions.open",
+      "Icon": "imgs/actions/open/action",
+      "Tooltip": "Asks FounderOS to open the resource linked to the visible event.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/open/key",
+          "Title": "Open",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Snooze 15 min",
+      "UUID": "com.yanndouchin.founderos-actions.snooze",
+      "Icon": "imgs/actions/snooze/action",
+      "Tooltip": "Snoozes the event currently displayed by FounderOS for 15 minutes.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/snooze/key",
+          "Title": "Snooze\n15 min",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Acknowledge",
+      "UUID": "com.yanndouchin.founderos-actions.acknowledge",
+      "Icon": "imgs/actions/acknowledge/action",
+      "Tooltip": "Hold to acknowledge the exact event displayed by FounderOS.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/acknowledge/key",
+          "Title": "Hold\nAcknowledge",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Allow",
+      "UUID": "com.yanndouchin.founderos-actions.allow",
+      "Icon": "imgs/actions/allow/action",
+      "Tooltip": "Hold to allow only the agent request that is still displayed.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/allow/key",
+          "Title": "Hold\nAllow",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "Deny",
+      "UUID": "com.yanndouchin.founderos-actions.deny",
+      "Icon": "imgs/actions/deny/action",
+      "Tooltip": "Denies only the agent request that is still displayed.",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/deny/key",
+          "Title": "Deny",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    },
+    {
+      "Name": "FounderOS Presence",
+      "UUID": "com.yanndouchin.founderos-actions.presence",
+      "Icon": "imgs/actions/presence/action",
+      "Tooltip": "Applies an explicit presence command, never a toggle.",
+      "PropertyInspectorPath": "ui/presence.html",
+      "Controllers": [
+        "Keypad"
+      ],
+      "States": [
+        {
+          "Image": "imgs/actions/presence/key",
+          "Title": "Focus\n50 min",
+          "TitleAlignment": "bottom",
+          "TitleColor": "#FFFFFF"
+        }
+      ]
+    }
+  ],
+  "Category": "FounderOS Actions",
+  "CategoryIcon": "imgs/plugin/category",
+  "CodePath": "bin/plugin.js",
+  "Description": "Secure local client for acting on the context displayed by FounderOS, without direct access to connected services.",
+  "Icon": "imgs/plugin/marketplace",
+  "SDKVersion": 2,
+  "Software": {
+    "MinimumVersion": "7.1"
+  },
+  "OS": [
+    {
+      "Platform": "mac",
+      "MinimumVersion": "13"
+    }
+  ],
+  "Nodejs": {
+    "Version": "20"
+  },
+  "UUID": "com.yanndouchin.founderos-actions"
+}

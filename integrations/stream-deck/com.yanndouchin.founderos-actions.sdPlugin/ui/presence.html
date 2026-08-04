@@ -1,0 +1,91 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>FounderOS Presence</title>
+    <style>
+      :root {
+        color-scheme: dark;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      body {
+        margin: 0;
+        padding: 16px;
+        color: #f5f7fa;
+        background: #2d2d2d;
+        font-size: 13px;
+      }
+      label {
+        display: block;
+        margin-bottom: 7px;
+        font-weight: 600;
+      }
+      select {
+        box-sizing: border-box;
+        width: 100%;
+        padding: 7px 8px;
+        color: #ffffff;
+        border: 1px solid #5d5d5d;
+        border-radius: 4px;
+        background: #3a3a3a;
+      }
+      p {
+        margin: 12px 0 0;
+        color: #c9cdd3;
+        line-height: 1.45;
+      }
+    </style>
+  </head>
+  <body>
+    <label for="preset">Explicit command</label>
+    <select id="preset">
+      <option value="focus50">Focus for 50 minutes</option>
+      <option value="manualCallStart">Start or renew a manual call</option>
+      <option value="manualCallStop">End the manual call</option>
+      <option value="recordingStart">Start or renew a recording</option>
+      <option value="recordingStop">End the recording</option>
+      <option value="recordingRenew">Extend the recording</option>
+      <option value="releaseManual">Release all manual Stream Deck leases</option>
+    </select>
+    <p>This action is never a toggle. It cannot release a Calendar-owned state.</p>
+    <script>
+      (() => {
+        const allowed = new Set([
+          "focus50",
+          "manualCallStart",
+          "manualCallStop",
+          "recordingStart",
+          "recordingStop",
+          "recordingRenew",
+          "releaseManual"
+        ]);
+        const select = document.getElementById("preset");
+        let socket;
+        let actionContext = "";
+
+        window.connectElgatoStreamDeckSocket = (port, uuid, registrationEvent, info, actionInfoText) => {
+          const actionInfo = JSON.parse(actionInfoText);
+          actionContext = actionInfo.context;
+          const preset = actionInfo.payload?.settings?.preset;
+          select.value = allowed.has(preset) ? preset : "focus50";
+          socket = new WebSocket(`ws://127.0.0.1:${port}`);
+          socket.addEventListener("open", () => {
+            socket.send(JSON.stringify({ event: registrationEvent, uuid }));
+          });
+        };
+
+        select.addEventListener("change", () => {
+          if (!socket || socket.readyState !== WebSocket.OPEN || !allowed.has(select.value)) {
+            return;
+          }
+          socket.send(JSON.stringify({
+            context: actionContext,
+            event: "setSettings",
+            payload: { schemaVersion: 1, preset: select.value }
+          }));
+        });
+      })();
+    </script>
+  </body>
+</html>

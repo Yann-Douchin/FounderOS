@@ -35,7 +35,9 @@
       "require_pairing": true,
       "include_all_day": false,
       "include_tentative": true,
-      "off_delay_seconds": 15
+      "off_delay_seconds": 15,
+      "lease_min_ttl_seconds": 5,
+      "lease_max_ttl_seconds": 28800
     }
   },
   "interaction": {
@@ -49,7 +51,11 @@
     "acknowledge_key": "ok",
     "snooze_key": "back",
     "open_key": "custom",
-    "snooze_minutes": 15
+    "snooze_minutes": 15,
+    "action_consumer_enabled": true,
+    "action_consumer_poll_seconds": 0.5,
+    "action_consumer_max_history": 1000,
+    "action_consumer_max_age_seconds": 300
   },
   "llm": {
     "enabled": false

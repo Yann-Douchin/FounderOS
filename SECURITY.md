@@ -13,18 +13,19 @@ Use a private GitHub security advisory when the dedicated repository is publishe
 ## Trust model
 
 - Emulator SSE input is untrusted. It cannot approve, deny, acknowledge, snooze, or open an event.
-- Mutating input uses a loopback-only HMAC bridge. Every message is bound to the exact selected event and permission request, expires after a short clock window, and carries a one-use nonce.
+- Mutating input uses either a loopback-only HMAC bridge or a private Unix socket restricted to the authenticated operating-system account. Event messages are bound to the exact selected event and permission request. Presence messages are limited to bounded, source-owned leases. Every mutation expires after a short clock window and carries a one-use nonce.
 - A signed message is actionable only while that exact event is confirmed as the current screen owner. Draw errors and priority conflicts invalidate the context before input can be accepted.
-- The authenticated operating-system user remains trusted. A process already running as that user can read the configured secret or modify local state.
+- The authenticated operating-system user remains trusted. A process already running as that user can connect to the private socket, read an environment-backed secret, or modify local state. The Unix socket does not claim process-level isolation within that account.
 - Claude and Codex hooks return no decision when FounderOS is unavailable or times out. Their normal approval flow then continues.
 - Connector and hook state defaults to the platform application-state directory, outside the checkout and iCloud project folder. Directories use mode `0700` and files use mode `0600` where the platform supports POSIX permissions.
-- Connector credentials are read from environment variables. Google refresh credentials and access tokens are kept in memory and are never persisted by FounderOS.
+- Connector and bridge credentials come from the configured secret provider. Production uses the macOS Keychain. Google refresh credentials and access tokens are kept in memory and are never written to runtime state by FounderOS.
 - A non-loopback BUSY Bar endpoint requires `X-API-Token` in production. FounderOS also sends `X-API-Sem-Ver: 25.0.0`.
-- HTTP clients reject embedded credentials, disable redirects, cap responses, and allow plain HTTP only on loopback. Queued open actions accept HTTPS links or loopback HTTP links only.
+- HTTP clients reject embedded credentials, disable redirects, cap responses, and allow plain HTTP only on loopback. Queued open actions accept HTTPS links or loopback HTTP links only. The consumer revalidates every claimed record and never replays an indeterminate claim after restart.
+- The reserved Calendar `meeting` state cannot be created or released through the local lease endpoint. `release_all` is scoped to Stream Deck leases.
 
 ## Deployment rules
 
-1. Generate a dedicated `FOUNDEROS_INPUT_SECRET` with `python apps/founderos_input.py --generate-secret`.
+1. Allowlist `FOUNDEROS_INPUT_SECRET`. Keychain-backed `service install` generates a missing value without printing it. Environment-backed deployments must provision it before startup.
 2. Restrict the FounderOS process and its state directory to one operating-system account.
 3. Use `founderos.production.example.json` as the deployment baseline.
 4. Keep `llm.enabled` false unless an explicit data-processing review approves the fallback.

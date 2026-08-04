@@ -5,6 +5,7 @@ web/dist/
 founderos.local.json
 founderos.*.local.json
 __pycache__/
+__pycache__.icloud-stale-*/
 *.pyc
 .DS_Store
 
