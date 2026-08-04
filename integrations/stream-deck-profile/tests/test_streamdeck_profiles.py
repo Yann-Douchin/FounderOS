@@ -180,6 +180,64 @@ class GeneratedProfilesTest(unittest.TestCase):
         self.assertEqual(first["NativeCode"], 49)
         self.assertEqual(first["QTKeyCode"], 32)
 
+    def test_meet_shortcuts_use_french_azerty_physical_codes(self) -> None:
+        actions = list(profiles._iter_actions(self.page("call")))
+        expected = {
+            "Meet\nmic": {"NativeCode": 2, "QTKeyCode": 68, "VKeyCode": 2},
+            "Meet\ncamera": {"NativeCode": 14, "QTKeyCode": 69, "VKeyCode": 14},
+        }
+        for title, keycodes in expected.items():
+            matching = [
+                action
+                for action in actions
+                if action.get("UUID") == "com.elgato.streamdeck.system.hotkey"
+                and title in profiles._action_titles(action)
+            ]
+            self.assertEqual(len(matching), 1)
+            first = matching[0]["Settings"]["Hotkeys"][0]
+            self.assertTrue(first["KeyCmd"])
+            self.assertFalse(first["KeyCtrl"])
+            self.assertFalse(first["KeyOption"])
+            self.assertFalse(first["KeyShift"])
+            self.assertEqual(first["KeyModifiers"], 8)
+            for field, value in keycodes.items():
+                self.assertEqual(first[field], value)
+
+    def test_meet_profile_is_manual_and_prepare_meet_activates_arc(self) -> None:
+        self.assertNotIn("AppIdentifier", self.outer("call"))
+        self.assertEqual(
+            profiles.SMART_PROFILE_APPS,
+            {"studio": "/Applications/OBS.app"},
+        )
+        cockpit_actions = list(profiles._iter_actions(self.page("cockpit")))
+        arc_actions = [
+            action
+            for action in cockpit_actions
+            if action.get("UUID") == "com.elgato.streamdeck.system.open"
+            and action.get("Settings", {}).get("path")
+            == json.dumps("/Applications/Arc.app")
+        ]
+        self.assertEqual(len(arc_actions), 1)
+        titles = {title for action in cockpit_actions for title in profiles._action_titles(action)}
+        self.assertIn("Prepare\nMeet", titles)
+        self.assertNotIn("Prepare\ncall", titles)
+
+    def test_rebuild_removes_stale_private_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="founderos-streamdeck-rebuild-") as root:
+            output = Path(root)
+            builder = profiles.ProfileBuilder(self.paths, output)
+            builder.build()
+            stale_icon = output / "live" / ".call-icons" / "stale.png"
+            stale_icon.write_bytes(b"stale")
+            stale_export = output / "exports" / "FounderOS Legacy.streamDeckProfile"
+            stale_export.write_bytes(b"stale")
+
+            builder.build()
+
+            self.assertFalse(stale_icon.exists())
+            self.assertFalse(stale_export.exists())
+            self.assertTrue(builder.validate(output / "live")["valid"])
+
     def test_things_uses_official_deep_link(self) -> None:
         paths = [
             action.get("Settings", {}).get("path")
@@ -201,7 +259,7 @@ class GeneratedProfilesTest(unittest.TestCase):
                 ]
                 self.assertEqual(nested, [])
 
-    def test_call_light_acquires_presence_and_restores_work_lights(self) -> None:
+    def test_meet_lights_acquire_presence_and_restore_work_lights(self) -> None:
         actions = list(profiles._iter_actions(self.page("call")))
         presets = {
             action.get("Settings", {}).get("preset")

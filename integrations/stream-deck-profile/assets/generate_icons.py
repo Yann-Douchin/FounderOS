@@ -36,7 +36,7 @@ ACCENTS = {
     "founderos": "#4EA1FF",
     "focus": "#A678FF",
     "capture": "#39D98A",
-    "call": "#FFB14E",
+    "meet": "#FFB14E",
     "studio": "#FF5A64",
     "safe": "#39D98A",
     "danger": "#FF5A64",
@@ -93,9 +93,10 @@ GLYPHS = {
 <path d="M43 70v13c0 6 4 10 10 10h38c6 0 10-4 10-10V70"/>
 <path d="M72 35v38M55 54h34"/>
 """,
-    "prepare_call": """
-<path d="M48 39l12 17-9 7c5 10 12 18 23 23l7-10 18 11-5 10c-3 6-10 8-16 6-23-7-41-25-48-48-2-6 0-13 6-16z"/>
-<path d="M91 40v18M82 49h18" opacity=".74"/>
+    "prepare_meet": """
+<rect x="37" y="46" width="59" height="42" rx="10"/>
+<path d="M96 58l13-8v34l-13-8z"/>
+<path d="M51 35v20M41 45h20" opacity=".74"/>
 """,
     "open_studio": """
 <rect x="39" y="50" width="66" height="45" rx="8"/>
@@ -143,6 +144,11 @@ GLYPHS = {
 <path d="M46 49V38h15M98 49V38H83M46 80v11h15M98 80v11H83"/>
 <circle cx="72" cy="65" r="18"/>
 <circle cx="72" cy="65" r="6" fill="{accent}" stroke="none"/>
+""",
+    "meet_camera": """
+<rect x="37" y="45" width="59" height="42" rx="10"/>
+<path d="M96 57l13-8v34l-13-8z"/>
+<circle cx="66" cy="66" r="8" fill="{accent}" stroke="none"/>
 """,
     "screenbrush": """
 <path d="M49 87l34-43 17 14-35 43H46z"/>
@@ -262,32 +268,32 @@ PROFILE_ASSETS = (
     IconAsset("cockpit-key-2-0-priority-handle.png", "priority_handle", "safe", "Cockpit, acknowledge"),
     IconAsset("cockpit-key-3-0-focus-50.png", "focus", "focus", "Cockpit, focus"),
     IconAsset("cockpit-key-0-1-things-capture.png", "things_capture", "capture", "Cockpit, capture"),
-    IconAsset("cockpit-key-1-1-prepare-call.png", "prepare_call", "call", "Cockpit, prepare call"),
+    IconAsset("cockpit-key-1-1-prepare-meet.png", "prepare_meet", "meet", "Cockpit, prepare Meet"),
     IconAsset("cockpit-key-2-1-open-studio.png", "open_studio", "studio", "Cockpit, studio"),
     IconAsset("cockpit-key-3-1-end-session.png", "end_session", "danger", "Cockpit, finish"),
     IconAsset("cockpit-dial-0-output-volume.png", "output_volume", "utility", "Cockpit, volume"),
     IconAsset("cockpit-dial-1-yeti-input.png", "microphone_gain", "utility", "Cockpit, Yeti X"),
     IconAsset("cockpit-dial-2-work-lights.png", "work_lights", "capture", "Cockpit, lighting"),
     IconAsset("cockpit-dial-3-mode-wheel.png", "mode_wheel", "founderos", "Cockpit, modes"),
-    IconAsset("cockpit-wheel-0-call.png", "prepare_call", "call", "Call mode"),
+    IconAsset("cockpit-wheel-0-meet.png", "prepare_meet", "meet", "Meet mode"),
     IconAsset("cockpit-wheel-1-studio.png", "open_studio", "studio", "Studio mode"),
     IconAsset("cockpit-wheel-2-writing.png", "writing", "focus", "Writing mode"),
     IconAsset("cockpit-wheel-3-presentation.png", "presentation", "presentation", "Presentation mode"),
     IconAsset("cockpit-wheel-4-home.png", "home", "capture", "Home mode"),
-    IconAsset("call-key-0-0-mic-mute.png", "microphone_muted", "call", "Call, microphone"),
-    IconAsset("call-key-1-0-face-tracking.png", "camera_tracking", "call", "Call, camera tracking"),
-    IconAsset("call-key-2-0-screenbrush.png", "screenbrush", "utility", "Call, ScreenBrush"),
-    IconAsset("call-key-3-0-notes.png", "notes", "capture", "Call, notes"),
-    IconAsset("call-key-0-1-lights.png", "call_lights", "call", "Call, lights"),
-    IconAsset("call-key-1-1-prompter-inactive.png", "prompter", "utility", "Call, Prompter inactive"),
-    IconAsset("call-key-1-1-prompter-active.png", "prompter_active", "call", "Call, Prompter active", True),
-    IconAsset("call-key-2-1-priority-open.png", "priority_open", "founderos", "Call, priority"),
-    IconAsset("call-key-3-1-end-call.png", "end_call", "danger", "Call, end"),
-    IconAsset("call-dial-0-yeti-gain.png", "microphone_gain", "call", "Call, Yeti X gain"),
-    IconAsset("call-dial-1-output-volume.png", "output_volume", "utility", "Call, volume"),
-    IconAsset("call-dial-2-video-lights.png", "video_lights", "call", "Call, video lights"),
-    IconAsset("call-dial-3-prompter-inactive.png", "prompter", "utility", "Call, Prompter dial"),
-    IconAsset("call-dial-3-prompter-active.png", "prompter_active", "call", "Call, Prompter dial active", True),
+    IconAsset("meet-key-0-0-microphone.png", "microphone_muted", "meet", "Meet, microphone"),
+    IconAsset("meet-key-1-0-camera.png", "meet_camera", "meet", "Meet, camera"),
+    IconAsset("meet-key-2-0-screenbrush.png", "screenbrush", "utility", "Meet, ScreenBrush"),
+    IconAsset("meet-key-3-0-notes.png", "notes", "capture", "Meet, notes"),
+    IconAsset("meet-key-0-1-lights.png", "call_lights", "meet", "Meet, lights"),
+    IconAsset("meet-key-1-1-camera-tracking.png", "camera_tracking", "meet", "Meet, camera tracking"),
+    IconAsset("meet-key-2-1-prompter-inactive.png", "prompter", "utility", "Meet, Prompter inactive"),
+    IconAsset("meet-key-2-1-prompter-active.png", "prompter_active", "meet", "Meet, Prompter active", True),
+    IconAsset("meet-key-3-1-end.png", "end_call", "danger", "Meet, end"),
+    IconAsset("meet-dial-0-yeti-gain.png", "microphone_gain", "meet", "Meet, Yeti X gain"),
+    IconAsset("meet-dial-1-output-volume.png", "output_volume", "utility", "Meet, volume"),
+    IconAsset("meet-dial-2-video-lights.png", "video_lights", "meet", "Meet, video lights"),
+    IconAsset("meet-dial-3-prompter-inactive.png", "prompter", "utility", "Meet, Prompter dial"),
+    IconAsset("meet-dial-3-prompter-active.png", "prompter_active", "meet", "Meet, Prompter dial active", True),
     IconAsset("studio-key-0-0-prepare-lights.png", "studio_prepare", "studio", "Studio, prepare"),
     IconAsset("studio-key-1-0-record-start.png", "record_start", "danger", "Studio, start REC"),
     IconAsset("studio-key-2-0-record-pause.png", "record_pause", "studio", "Studio, pause"),
