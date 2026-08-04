@@ -570,7 +570,7 @@ def _service_command(args: argparse.Namespace, config: dict, config_path: Path) 
         )
         return 0
     _ensure_interaction_secret(config)
-    _preflight(config_path)
+    _preflight(config_path, config)
     state = state_root()
     deployment = stage_runtime_bundle(
         repository=REPO_ROOT,
@@ -843,7 +843,10 @@ def _wait_for_emulator(config: dict, *, timeout_seconds: float) -> None:
     raise ServiceError(f"BUSY Bar emulator LaunchAgent did not become healthy: {latest_state}")
 
 
-def _preflight(config_path: Path) -> None:
+def _preflight(config_path: Path, config: dict) -> None:
+    if _supervised_runtime_is_ready(config):
+        print("Fresh supervised health accepted for upgrade preflight")
+        return
     try:
         result = subprocess.run(
             [
@@ -865,6 +868,36 @@ def _preflight(config_path: Path) -> None:
         raise ServiceError("live connector preflight could not complete") from exc
     if result.returncode != 0:
         raise ServiceError(f"live connector preflight failed with exit code {result.returncode}")
+
+
+def _supervised_runtime_is_ready(config: dict) -> bool:
+    """Accept a fresh process-bound heartbeat only for an in-place upgrade.
+
+    A first installation still performs an independent live poll. An existing
+    healthy service has already proved credentials and connectivity under the
+    exact launchd execution boundary. The replacement must independently
+    regain the same readiness after launch, or the installer restores the old
+    service transactionally.
+    """
+    operations = config.get("operations", {})
+    try:
+        health_path = Path(str(operations["health_path"]))
+        stale_after = max(90.0, float(operations["heartbeat_seconds"]) * 4)
+    except (KeyError, TypeError, ValueError):
+        return False
+    status = service_status(
+        health_path=health_path,
+        stale_after_seconds=stale_after,
+    )
+    return bool(
+        status.loaded
+        and status.pid is not None
+        and status.health == "running"
+        and status.health_pid == status.pid
+        and status.display_healthy is True
+        and status.connectors_healthy is True
+        and status.automations_healthy is not False
+    )
 
 
 def _manual_browser(url: str) -> bool:

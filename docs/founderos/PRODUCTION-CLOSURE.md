@@ -87,6 +87,7 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-OPS-007 | Community-tool observations were informal and could drift without review | BarPilot is pinned by commit and file hash. All 53 paths, all 69 HTTP operations, the status WebSocket, and the firmware quirks are executable through `tools/barpilot_compat.py` and protected by contract tests | `test_emulator_contract`, `barpilot-api25-contract.json` | Maintainers | Closed |
 | FOS-OPS-008 | A healthy connector looked unhealthy during its next in-flight poll, making service status and deployment readiness intermittent | A polling connector remains ready only when it has a prior successful snapshot, zero failures, and no current error. Its first poll still fails closed until success | `test_autonomous_service` | Operations | Closed |
 | FOS-OPS-009 | Concurrent Stream Deck builds could leave the committed plug-in bundle different from its final source | CI rebuilds the plug-in from locked dependencies and rejects any diff in the delivered bundle. Installation also compares the repository and installed artifacts byte for byte after the single final build | Stream Deck verification, `.github/workflows/ci.yml`, `production_check.py` | Maintainers | Closed |
+| FOS-OPS-010 | An in-place upgrade could fail because a duplicate terminal process had different or transient network reachability from the healthy launchd service | First installation still requires an independent live poll. An upgrade may use only a fresh healthy heartbeat bound to the active launchd PID, and the replacement must independently regain full readiness or the installer restores the prior service | `test_autonomous_service` | Operations | Closed |
 
 ## Explicit capability boundary
 
@@ -126,7 +127,7 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 
 | Gate | Status | Evidence or remaining owner |
 | --- | --- | --- |
-| Local CI equivalent | Passed | 261 core tests, 36 Stream Deck plug-in tests, 15 profile tests, production invariants, frontend build, and deterministic demo |
+| Local CI equivalent | Passed | 264 core tests, 36 Stream Deck plug-in tests, 18 profile tests, production invariants, frontend build, and deterministic demo |
 | Emulator API 25 and rendering | Passed | Pinned BarPilot source hash, WebSocket status, BGR and gray screen buffers, same-app merge, cross-app priority arbitration, all governed blockers, and native plus raster accent readback |
 | Signed interaction | Passed locally | Exact-context allow, consumed-context rejection, and untrusted SSE refusal |
 | Dedicated GitHub repository and branch protection | Passed | Public repository [Yann-Douchin/FounderOS](https://github.com/Yann-Douchin/FounderOS); protected `main` requires `web`, `python (3.11)`, `python (3.13)`, `stream-deck`, and `barpilot-conformance` with strict, linear, pull-request-only changes |
