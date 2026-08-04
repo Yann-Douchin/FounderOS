@@ -54,7 +54,10 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-CONN-014 | Google authorization could over-request or under-request Workspace scopes | OAuth derives the smallest supported read-only set from enabled connectors and validates the complete returned grant before storage | `test_autonomous_service` | Security | Closed |
 | FOS-AUTO-001 | Calendar occupancy could require a direct, vendor-specific Hue integration | FounderOS publishes one generic state through the BUSY Bar Matter switch. Apple Home, Google Home, or Home Assistant owns the Hue mapping | `test_calendar_busy_automation`, `test_cli`, `production_check.py` | Integrations | Closed |
 | FOS-AUTO-002 | Starting a device BUSY session for Calendar occupancy could block the decision display | The output uses only `/api/smart_home/switch`, never a BUSY timer, and the production invariant rejects a timer path in the automation | `test_display`, `test_calendar_busy_automation`, `production_check.py` | Display | Closed |
-| FOS-AUTO-003 | Cancelled, declined, free, stale, or all-day Calendar data could advertise the wrong presence state | Deterministic event semantics exclude cancelled, declined, and transparent events, exclude all-day events by default, hold the previous state when Calendar is stale, confirm writes, delay off transitions, and retry with bounded backoff | `test_calendar_busy_automation`, `test_connectors`, `test_runtime`, `test_autonomous_service` | Runtime | Closed |
+| FOS-AUTO-003 | Cancelled, declined, free, stale, retrying, or all-day Calendar data could advertise the wrong presence state | Deterministic event semantics exclude cancelled, declined, and transparent events, exclude all-day events by default, hold the previous state while Calendar is stale or retrying after failure, confirm writes, delay off transitions, and retry with bounded backoff | `test_calendar_busy_automation`, `test_connectors`, `test_runtime`, `test_autonomous_service` | Runtime | Closed |
+| FOS-AUTO-004 | Stream Deck and Calendar could independently fight over the same red indicator | One coordinator applies the fixed priority `recording > meeting > manual_call > focus > available`; only the aggregate drives the Matter switch | `test_occupancy`, `test_calendar_busy_automation` | Runtime | Closed |
+| FOS-AUTO-005 | A stuck manual mode could advertise indefinite occupancy | External states require a bounded TTL, renewals require the same live owner, reserved `meeting` cannot be leased, and expired leases are pruned before every aggregate read | `test_occupancy`, `test_production_security` | Security | Closed |
+| FOS-AUTO-006 | Ending a recording or the workday could clear an active Calendar meeting | Calendar state is stored outside the local lease table. Stale Calendar retains its last state, while `release_all` is scoped only to Stream Deck leases | `test_occupancy`, `test_calendar_busy_automation`, `test_runtime` | Runtime | Closed |
 | FOS-RUN-001 | Serial polling froze the runtime | Connector workers are concurrent. Normal ticks never wait, and overdue polls create incidents | `test_scheduler_health` | Runtime | Closed |
 | FOS-RUN-002 | Corrupt or unbounded ranking memory could crash or grow forever | Memory tolerates malformed sections, timestamps acknowledgements, resurfaces updated events, prunes by age and count, and fsyncs atomic writes | `test_memory` | Runtime | Closed |
 | FOS-RANK-001 | Permission priority was only a bonus | Permissions form a strict selection partition and never invoke the LLM tie breaker | `test_ranking` | Ranking | Closed |
@@ -67,6 +70,9 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-TIME-001 | Linear dates expired around UTC midnight | Resolve date-only deadlines at local end of day | `test_connectors` | Data model | Closed |
 | FOS-TIME-002 | All-day Calendar events disappeared | Normalize date-only events with exclusive local end dates | `test_connectors` | Data model | Closed |
 | FOS-UX-001 | Normal events had no actions | Trusted input can acknowledge, snooze, and queue open actions | `test_runtime` | Product | Closed |
+| FOS-UX-002 | Stream Deck could duplicate private BUSY Bar content, guess which actions apply, or disturb another runtime socket | Bridge version 2 exposes only semantic capabilities, exact opaque identifiers, and a content-free presence aggregate after display confirmation. Its same-account socket is private, bounded, explicit about its account-level trust boundary, and removed only by the instance that owns its exact filesystem identity | `test_runtime`, `test_input_client`, `test_production_security`, `test_runtime_visibility` | Security | Closed |
+| FOS-UX-003 | Queued open actions had no safe consumer or durable outcome evidence | The consumer revalidates owner, exact mode `0600`, single-link regular-file bounds, safe URLs, and age. It claims before opening, writes private content-free audits, and never replays an indeterminate claim | `test_actions` | Security | Closed |
+| FOS-UX-004 | Stream Deck context polling could launch a Python helper every two seconds | The normal path is a direct, bounded Node client to the private Unix socket and launches no child process. Only an absent socket permits the HMAC helper fallback; concurrent calls are deduplicated, failures back off from 5 to 60 seconds, and security or protocol failures remain fail closed | Stream Deck transport tests | Runtime | Closed |
 | FOS-I18N-001 | Accents were stripped or rendered as replacement glyphs | Normalize all event text to NFC, preserve labels, use the global scrolling font for non-ASCII titles, and verify the complete French glyph set | `test_models`, `test_display`, `production_check.py` | Display | Closed |
 | FOS-I18N-002 | Uppercase accents existed in the atlas but were clipped above its visible line | Fold only top overshoot pixels into the first scanline while preserving the baseline, then reject every negative French glyph offset | `test_display`, `test_capture`, `production_check.py` | Display | Closed |
 | FOS-I18N-003 | FounderOS mixed French system labels into an English interface | System fallbacks, health incidents, permission controls, readiness labels, and demo copy are English, while multilingual content recognition and Unicode rendering remain intact | `production_check.py`, connector tests | Product | Closed |
@@ -79,17 +85,25 @@ This register converts the hostile review into owned controls, executable eviden
 | FOS-OPS-005 | The emulator silently listened on every network interface | The default server and its LaunchAgent bind explicitly to `127.0.0.1`; hardware deployment requires an explicit separate host and token policy | `test_autonomous_service`, `production_check.py` | Security | Closed |
 | FOS-OPS-006 | Launchd could stall while reading a checkout inside a macOS protected folder, and a failed service replacement could leave no working definition | A shell bootstrap archives committed runtime sources into a private content-addressed deployment outside the checkout. LaunchAgent replacement retries transient bootstrap failures, verifies readiness, and transactionally restores both prior definitions and loaded states on failure | `test_autonomous_service`, `production_check.py` | Operations | Closed |
 | FOS-OPS-007 | Community-tool observations were informal and could drift without review | BarPilot is pinned by commit and file hash. All 53 paths, all 69 HTTP operations, the status WebSocket, and the firmware quirks are executable through `tools/barpilot_compat.py` and protected by contract tests | `test_emulator_contract`, `barpilot-api25-contract.json` | Maintainers | Closed |
+| FOS-OPS-008 | A healthy connector looked unhealthy during its next in-flight poll, making service status and deployment readiness intermittent | A polling connector remains ready only when it has a prior successful snapshot, zero failures, and no current error. Its first poll still fails closed until success | `test_autonomous_service` | Operations | Closed |
+| FOS-OPS-009 | Concurrent Stream Deck builds could leave the committed plug-in bundle different from its final source | CI rebuilds the plug-in from locked dependencies and rejects any diff in the delivered bundle. Installation also compares the repository and installed artifacts byte for byte after the single final build | Stream Deck verification, `.github/workflows/ci.yml`, `production_check.py` | Maintainers | Closed |
 
 ## Explicit capability boundary
 
 The emulator `/events` endpoint is useful for visual testing but provides no authenticated input. The reviewed BUSY Bar HTTP contract provides display APIs, not a host-readable physical button stream. FounderOS does not treat those events as authoritative.
 
-The production input contract is `SignedInputListener`:
+The production input contract is bridge version 2. It has two local transports:
+
+- `SignedInputListener` exposes HMAC-authenticated loopback HTTP for adapters outside the private runtime directory.
+- `LocalInputListener` exposes a mode `0600` Unix socket below an account-owned mode `0700` state directory. Same-account desktop integrations use it without reading the Keychain secret. It provides account-level isolation and does not claim isolation from another process already running as that user.
+
+Both transports enforce the same payload contract:
 
 1. The adapter authenticates to `GET /context` on loopback.
-2. It reads the exact selected `event_id` and optional `request_id`.
-3. It sends the key, context, Unix timestamp, and random nonce to `POST /input`.
-4. It signs the canonical JSON body with `FOUNDEROS_INPUT_SECRET`.
+2. It reads the exact selected `event_id`, optional `request_id`, semantic capabilities, and content-free aggregate presence.
+3. It sends the key, context, Unix timestamp, and random nonce to the input operation.
+4. HTTP clients sign the canonical JSON body with `FOUNDEROS_INPUT_SECRET`. Unix-socket clients rely on the private same-account endpoint and never receive that secret.
+5. Presence clients use the corresponding presence operation for bounded acquire, renew, release, or source-scoped release-all requests.
 
 `apps/founderos_input.py` is the reference client. A physical transport adapter may implement the same contract. Bridging emulator SSE into this trusted endpoint is prohibited.
 
@@ -100,25 +114,27 @@ The Codex hook follows the official `PermissionRequest` contract. `allow` procee
 ## Release gates
 
 1. CI is green on the dedicated GitHub repository.
-2. Branch protection requires the Python and web jobs.
+2. Branch protection requires the web, Python 3.11, Python 3.13, Stream Deck, and BarPilot conformance jobs.
 3. A real BUSY Bar returns API major `25`, renders a structural transition without stale elements, accepts its configured token, exposes valid front and back screen buffers, and passes either native or raster French-glyph readback.
 4. Linear, Calendar, Slack, and Gmail each complete a live poll with `healthy` status using least-privilege credentials.
-5. If device input is enabled, its adapter passes allow, deny, replay, stale-context, acknowledge, snooze, and open tests.
+5. If device input is enabled, its adapter passes allow, deny, replay, stale-context, acknowledge, snooze, open, lease TTL, lease priority, and source-scoped release tests.
 6. No private snapshot, token, email body, Slack content, or permission payload appears in Git or CI logs.
-7. If the Calendar busy indicator is enabled, the physical BUSY Bar is commissioned into a Matter fabric, its API token is present in the Keychain, both switch transitions are confirmed, and the controller maps only the intended Hue accessory.
+7. If the presence indicator is enabled, the physical BUSY Bar is commissioned into a Matter fabric, its API token is present in the Keychain, both switch transitions are confirmed, local lease expiry is observed, and the controller maps only the intended Hue accessory.
+8. The Stream Deck plug-in bundle is reproducible from its locked source, matches the installed artifact byte for byte, uses the private Unix socket without periodic child processes, and its five generated profiles pass structural and visual acceptance.
 
-## Gate status, 2026-08-02
+## Gate status, 2026-08-04
 
 | Gate | Status | Evidence or remaining owner |
 | --- | --- | --- |
-| Local CI equivalent | Passed | 225 Python and Node-backed tests, production invariants, frontend build, and deterministic demo |
+| Local CI equivalent | Passed | 261 core tests, 36 Stream Deck plug-in tests, 15 profile tests, production invariants, frontend build, and deterministic demo |
 | Emulator API 25 and rendering | Passed | Pinned BarPilot source hash, WebSocket status, BGR and gray screen buffers, same-app merge, cross-app priority arbitration, all governed blockers, and native plus raster accent readback |
 | Signed interaction | Passed locally | Exact-context allow, consumed-context rejection, and untrusted SSE refusal |
-| Dedicated GitHub repository and branch protection | Passed | Public repository [Yann-Douchin/FounderOS](https://github.com/Yann-Douchin/FounderOS); protected `main` requires `web`, `python (3.11)`, and `python (3.13)` with strict, linear, pull-request-only changes |
-| Live Linear | Passed | Read-only OAuth refresh completed from the macOS Keychain; portfolio poll reported `healthy` with 9 current events |
+| Dedicated GitHub repository and branch protection | Passed | Public repository [Yann-Douchin/FounderOS](https://github.com/Yann-Douchin/FounderOS); protected `main` requires `web`, `python (3.11)`, `python (3.13)`, `stream-deck`, and `barpilot-conformance` with strict, linear, pull-request-only changes |
+| Live Linear | Passed | Read-only OAuth refresh completed from the macOS Keychain; the portfolio connector reported `healthy` |
 | Live Slack | Passed | Private app installed with `channels:history` and `groups:history` only; six allowlisted conversations passed read-only checks and the connector reported `healthy` |
-| Live Calendar and Gmail | Passed | Offline read-only Google OAuth credentials are stored in the macOS Keychain; Gmail reported `healthy` with 2 current events and Calendar reported `healthy` with no current event |
+| Live Calendar and Gmail | Passed | Offline read-only Google OAuth credentials are stored in the macOS Keychain; both connectors reported `healthy` |
 | Autonomous polling supervisor | Passed | Both LaunchAgents are active from a private content-addressed deployment; the fresh heartbeat PID matches launchd, the emulator API reports `25.0.0`, the display is healthy, and all four live connectors report `healthy` |
+| Stream Deck actions and profiles | Passed | The active plug-in uses the direct version 2 private socket with zero locator or helper calls on its normal path. Its 60-icon suite, 53 visible surfaces, and five installed profiles pass structural and live validation. The repository and installed bundles are identical with SHA-256 `a492f3ad26df642defb8aff3f88bdd6af9aaec291ae3581d0eb6a317d3fe73ee`; the distributable package has SHA-256 `dfd7cf19ab5d238c854516eb669d8b922b6266302ac36f86203aab14bc41164c` |
 | Calendar to Matter indicator | Controlled | The deterministic output, authenticated API 25 contract, health gate, stale-state policy, confirmation, and retries are implemented. Physical commissioning, the BUSY Bar LAN endpoint, and the Apple Home Hue mapping remain deployment-specific evidence |
 | Physical BUSY Bar acceptance | Pending hardware | Run the documented BarPilot mutation window and both `founderosctl display` checks, then complete token, transition, animation, and button-adapter cases |
-| Codex project hook approval | Pending operator UI | Open `/hooks` in Codex and approve the reviewed local definition once |
+| Codex project hook approval | Passed by operator | The one-time local project definition was approved in `/hooks`; the hook runtime and contract tests also pass. The repository cannot independently inspect Codex's UI approval state |

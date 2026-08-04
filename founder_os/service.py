@@ -458,7 +458,7 @@ def _health_status(
     connectors = payload.get("connectors")
     if isinstance(connectors, Mapping) and connectors:
         connectors_healthy = all(
-            isinstance(state, Mapping) and state.get("status") == "healthy"
+            _connector_heartbeat_is_ready(state)
             for state in connectors.values()
         )
     else:
@@ -481,6 +481,24 @@ def _health_status(
         display_healthy,
         connectors_healthy,
         automations_healthy,
+    )
+
+
+def _connector_heartbeat_is_ready(state: Any) -> bool:
+    if not isinstance(state, Mapping):
+        return False
+    status = str(state.get("status") or "")
+    if status == "healthy":
+        return True
+    failures = state.get("failures")
+    return bool(
+        status == "polling"
+        and isinstance(state.get("last_success_at"), str)
+        and str(state.get("last_success_at")).strip()
+        and isinstance(failures, int)
+        and not isinstance(failures, bool)
+        and failures == 0
+        and state.get("error_present") is False
     )
 
 

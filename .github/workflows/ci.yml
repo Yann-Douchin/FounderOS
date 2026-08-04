@@ -49,6 +49,31 @@ jobs:
       - name: Build emulator frontend
         run: npm run build
 
+  stream-deck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: integrations/stream-deck/package-lock.json
+      - name: Install locked Stream Deck dependencies
+        run: npm ci --prefix integrations/stream-deck
+      - name: Verify the Stream Deck plugin
+        run: npm run verify --prefix integrations/stream-deck
+      - name: Verify the committed Stream Deck bundle is reproducible
+        run: >-
+          git diff --exit-code --
+          integrations/stream-deck/com.yanndouchin.founderos-actions.sdPlugin/bin/plugin.js
+      - name: Verify the profile generator
+        run: >-
+          python -m unittest discover
+          -s integrations/stream-deck-profile/tests -v
+
   barpilot-conformance:
     runs-on: ubuntu-latest
     steps:

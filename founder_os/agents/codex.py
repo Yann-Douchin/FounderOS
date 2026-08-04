@@ -94,7 +94,7 @@ class CodexAppServerClient:
                     "clientInfo": {
                         "name": "founderos_busybar",
                         "title": "FounderOS for BUSY Bar",
-                        "version": "0.3.0",
+                        "version": "0.4.0",
                     }
                 },
             }

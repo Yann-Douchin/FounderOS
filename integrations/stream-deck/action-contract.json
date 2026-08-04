@@ -1,0 +1,122 @@
+{
+  "$schema": "./action-contract.schema.json",
+  "schemaVersion": 1,
+  "plugin": {
+    "name": "FounderOS Actions",
+    "uuid": "com.yanndouchin.founderos-actions",
+    "minimumStreamDeckVersion": "7.1",
+    "targetStreamDeckVersion": "7.5.1",
+    "sdkVersion": 2,
+    "nodeVersion": 20
+  },
+  "bridge": {
+    "version": 2,
+    "baseUrl": "http://127.0.0.1:8765",
+    "capabilityMap": {
+      "event.open": "open",
+      "event.snooze": "snooze",
+      "event.acknowledge": "acknowledge",
+      "permission.allow": "allow",
+      "permission.deny": "deny",
+      "presence.acquire": "presence.acquire",
+      "presence.renew": "presence.renew",
+      "presence.release": "presence.release",
+      "presence.release_all": "presence.release_all"
+    }
+  },
+  "actions": {
+    "status": {
+      "uuid": "com.yanndouchin.founderos-actions.status",
+      "bridgeKey": null,
+      "interaction": "read-only"
+    },
+    "open": {
+      "uuid": "com.yanndouchin.founderos-actions.open",
+      "bridgeKey": "custom",
+      "interaction": "press"
+    },
+    "snooze": {
+      "uuid": "com.yanndouchin.founderos-actions.snooze",
+      "bridgeKey": "back",
+      "interaction": "press",
+      "contextualWhenCapability": {
+        "capability": "deny",
+        "bridgeKey": "back",
+        "semanticAction": "deny"
+      }
+    },
+    "acknowledge": {
+      "uuid": "com.yanndouchin.founderos-actions.acknowledge",
+      "bridgeKey": "ok",
+      "interaction": "hold",
+      "holdMilliseconds": 1200,
+      "contextualWhenCapability": {
+        "capability": "allow",
+        "bridgeKey": "ok",
+        "semanticAction": "allow"
+      }
+    },
+    "allow": {
+      "uuid": "com.yanndouchin.founderos-actions.allow",
+      "bridgeKey": "ok",
+      "interaction": "hold",
+      "holdMilliseconds": 1200
+    },
+    "deny": {
+      "uuid": "com.yanndouchin.founderos-actions.deny",
+      "bridgeKey": "back",
+      "interaction": "press"
+    },
+    "presence": {
+      "uuid": "com.yanndouchin.founderos-actions.presence",
+      "bridgeKey": null,
+      "interaction": "press",
+      "settingsSchemaVersion": 1,
+      "settingsProperty": "preset",
+      "presets": {
+        "focus50": {
+          "action": "acquire",
+          "leaseId": "streamdeck.focus",
+          "state": "focus",
+          "ttlSeconds": 3000
+        },
+        "manualCallStart": {
+          "action": "acquire",
+          "leaseId": "streamdeck.manual_call",
+          "state": "manual_call",
+          "ttlSeconds": 7200
+        },
+        "manualCallStop": {
+          "action": "release",
+          "leaseId": "streamdeck.manual_call"
+        },
+        "recordingStart": {
+          "action": "acquire",
+          "leaseId": "streamdeck.recording",
+          "state": "recording",
+          "ttlSeconds": 14400
+        },
+        "recordingStop": {
+          "action": "release",
+          "leaseId": "streamdeck.recording"
+        },
+        "recordingRenew": {
+          "action": "renew",
+          "leaseId": "streamdeck.recording",
+          "ttlSeconds": 14400
+        },
+        "releaseManual": {
+          "action": "release_all"
+        }
+      }
+    }
+  },
+  "nativeProfileActions": {
+    "focus": "com.yanndouchin.founderos-actions.presence#focus50",
+    "capture": null,
+    "prepareCall": "com.yanndouchin.founderos-actions.presence#manualCallStart",
+    "studioRecordingStart": "com.yanndouchin.founderos-actions.presence#recordingStart",
+    "studioRecordingStop": "com.yanndouchin.founderos-actions.presence#recordingStop",
+    "end": "com.yanndouchin.founderos-actions.presence#releaseManual"
+  }
+}

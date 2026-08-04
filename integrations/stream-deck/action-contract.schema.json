@@ -1,0 +1,109 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://founderos.local/schemas/stream-deck-action-contract.json",
+  "title": "FounderOS Stream Deck action contract",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "plugin", "bridge", "actions", "nativeProfileActions"],
+  "properties": {
+    "$schema": { "type": "string" },
+    "schemaVersion": { "const": 1 },
+    "plugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "uuid", "minimumStreamDeckVersion", "targetStreamDeckVersion", "sdkVersion", "nodeVersion"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "uuid": { "const": "com.yanndouchin.founderos-actions" },
+        "minimumStreamDeckVersion": { "type": "string" },
+        "targetStreamDeckVersion": { "type": "string" },
+        "sdkVersion": { "const": 2 },
+        "nodeVersion": { "const": 20 }
+      }
+    },
+    "bridge": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["version", "baseUrl", "capabilityMap"],
+      "properties": {
+        "version": { "const": 2 },
+        "baseUrl": { "const": "http://127.0.0.1:8765" },
+        "capabilityMap": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "minLength": 1 },
+          "required": [
+            "event.open",
+            "event.snooze",
+            "event.acknowledge",
+            "permission.allow",
+            "permission.deny",
+            "presence.acquire",
+            "presence.renew",
+            "presence.release",
+            "presence.release_all"
+          ]
+        }
+      }
+    },
+    "actions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "open", "snooze", "acknowledge", "allow", "deny", "presence"],
+      "properties": {
+        "status": { "$ref": "#/$defs/action" },
+        "open": { "$ref": "#/$defs/action" },
+        "snooze": { "$ref": "#/$defs/action" },
+        "acknowledge": { "$ref": "#/$defs/action" },
+        "allow": { "$ref": "#/$defs/action" },
+        "deny": { "$ref": "#/$defs/action" },
+        "presence": {
+          "allOf": [
+            { "$ref": "#/$defs/action" },
+            {
+              "type": "object",
+              "required": ["settingsSchemaVersion", "settingsProperty", "presets"],
+              "properties": {
+                "settingsSchemaVersion": { "const": 1 },
+                "settingsProperty": { "const": "preset" },
+                "presets": {
+                  "type": "object",
+                  "minProperties": 1,
+                  "additionalProperties": { "$ref": "#/$defs/presencePreset" }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    "nativeProfileActions": {
+      "type": "object",
+      "additionalProperties": { "type": ["string", "null"] },
+      "required": ["focus", "capture", "prepareCall", "studioRecordingStart", "studioRecordingStop", "end"]
+    }
+  },
+  "$defs": {
+    "action": {
+      "type": "object",
+      "required": ["uuid", "bridgeKey", "interaction"],
+      "properties": {
+        "uuid": { "type": "string", "pattern": "^com\\.yanndouchin\\.founderos-actions\\." },
+        "bridgeKey": { "type": ["string", "null"] },
+        "interaction": { "enum": ["read-only", "press", "hold"] },
+        "holdMilliseconds": { "type": "integer", "minimum": 1000 },
+        "contextualWhenCapability": { "type": "object" }
+      }
+    },
+    "presencePreset": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["action"],
+      "properties": {
+        "action": { "enum": ["acquire", "renew", "release", "release_all"] },
+        "leaseId": { "type": "string", "minLength": 1 },
+        "state": { "enum": ["focus", "manual_call", "recording"] },
+        "ttlSeconds": { "type": "integer", "minimum": 1 }
+      }
+    }
+  }
+}

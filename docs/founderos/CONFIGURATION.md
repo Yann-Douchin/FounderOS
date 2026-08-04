@@ -336,22 +336,23 @@ Calendar includes timed and all-day events. Meetings whose titles match `readine
 
 References: [Gmail scopes](https://developers.google.com/identity/protocols/oauth2/scopes#gmail), [Calendar scopes](https://developers.google.com/workspace/calendar/api/auth).
 
-## Calendar busy indicator through BUSY Bar Matter
+## Multi-source presence indicator through BUSY Bar Matter
 
 Matter supplies the local device state and transport. A smart-home controller still owns the cross-device automation that maps the BUSY Bar switch to the Hue light. Home Assistant is not required when Apple Home or Google Home already controls both accessories.
 
 The governed path is:
 
 ```text
-Google Calendar event
-        |
-deterministic occupancy policy
-        |
-BUSY Bar /api/smart_home/switch
-        |
-Matter controller automation
-        |
-Desk Recording Indicator, red or off
+Google Calendar state       authenticated local leases with TTL
+              \             /
+           presence coordinator
+ recording > meeting > manual_call > focus > available
+                     |
+        BUSY Bar /api/smart_home/switch
+                     |
+          Matter controller automation
+                     |
+       Desk Recording Indicator, red or off
 ```
 
 Pair the physical BUSY Bar with the same Matter home that contains the Hue accessory. Then add two controller automations:
@@ -378,7 +379,9 @@ Enable the output only after the physical device is commissioned and its LAN API
       "off_delay_seconds": 15,
       "verify_interval_seconds": 60,
       "retry_seconds": 5,
-      "retry_max_seconds": 60
+      "retry_max_seconds": 60,
+      "lease_min_ttl_seconds": 5,
+      "lease_max_ttl_seconds": 28800
     }
   }
 }
@@ -395,12 +398,17 @@ python3 apps/founderosctl.py --config founderos.autonomous.local.json display ma
 
 This command reports only commissioning count, pairing status, and switch state. It never opens a pairing window and never prints a QR payload or manual commissioning code.
 
-The occupancy policy is deterministic:
+The presence policy is deterministic:
 
 - an event is busy only while its start and end interval contains the current time;
 - cancelled, self-declined, and `transparent` Calendar events are excluded;
 - tentative events count by default, all-day events do not;
-- an unavailable or stale Calendar source holds the last applied state instead of falsely advertising availability;
+- an unavailable or stale Calendar source holds its last known Calendar state instead of falsely advertising availability;
+- authenticated clients may lease only `focus`, `manual_call`, or `recording`; `meeting` remains reserved to Calendar;
+- aggregate priority is always `recording > meeting > manual_call > focus > available`;
+- only `recording`, `meeting`, and `manual_call` activate the Matter switch, while `focus` remains a local coordination state;
+- every local lease expires unless renewed, with a configurable 5-second to 8-hour default boundary and an absolute 24-hour configuration ceiling;
+- `release_all` removes only leases owned by the Stream Deck bridge and never clears Calendar;
 - a 15-second off delay absorbs adjacent meetings and short polling transitions;
 - writes are confirmed by reading the switch back, then retried with bounded exponential backoff;
 - automation health is part of the private service heartbeat and the production health gate.
@@ -516,7 +524,42 @@ python3 apps/agent_bridge.py request \
 
 ### Input boundary
 
-`interaction.mode: emulator_sse` is development telemetry only. Its input is always untrusted and cannot mutate an event. Production uses `signed_http`, bound to loopback, with at least a 32-byte secret from `FOUNDEROS_INPUT_SECRET`. Generate one with `python3 apps/founderos_input.py --generate-secret`. The reference client first reads the exact context and then signs a fresh request: `python3 apps/founderos_input.py ok` or `python3 apps/founderos_input.py back`. A physical button transport must implement that same contract. The hook falls back safely while no trusted transport exists.
+`interaction.mode: emulator_sse` is development telemetry only. Its input is always untrusted and cannot mutate an event. Production uses `signed_http`, bound to loopback, with a 32 to 256 character URL-safe secret from `FOUNDEROS_INPUT_SECRET`.
+
+For a Keychain deployment, list `FOUNDEROS_INPUT_SECRET` in `secrets.accounts` and enable signed interaction. `service install` creates a missing 256-bit secret directly in the macOS Keychain. The value is never printed, passed through argv, written to the configuration, or exported into the LaunchAgent environment. An environment-backed deployment must provision the value before installation.
+
+The same production mode also creates `founderos-input.sock` next to the private action outbox. Its parent directory is account-owned mode `0700`, and the socket is mode `0600`. `apps/founderos_input.py` prefers this socket, so same-account desktop integrations do not read or copy the Keychain secret and do not trigger a normal Touch ID prompt. If the socket is unavailable, the reference client falls back to the loopback HMAC transport. Both transports apply the same timestamp, nonce, key allowlist, event binding, permission binding, and lease validation. The socket is an operating-system account boundary, not a process-level sandbox within that account.
+
+`GET /context` requires `Authorization: Bearer <secret>`. Bridge version 2 returns only the exact visible event identifiers, its kind, semantic capabilities, and a content-free presence aggregate. It never returns the selected title, URL, body, lease identifiers, or owner names. Event capabilities are `event.open`, `event.snooze`, `event.acknowledge`, `permission.allow`, and `permission.deny`. Presence capabilities are `presence.acquire`, `presence.renew`, `presence.release`, and `presence.release_all`.
+
+Mutations use canonical JSON encoded as UTF-8 with sorted keys and no insignificant spaces. The exact body is signed with HMAC-SHA256 and sent as `X-FounderOS-Signature: sha256=<hex>`. Every request includes an integer Unix `issued_at` and a unique 16 to 128 character URL-safe `nonce`. The bridge rejects stale timestamps, nonce replay, invalid signatures, and non-loopback binding.
+
+The presence endpoint is `POST /presence/lease`:
+
+```json
+{"action":"acquire","issued_at":1785664800,"lease_id":"streamdeck.focus","nonce":"fresh-random-nonce-0001","state":"focus","ttl_seconds":300}
+```
+
+- `acquire` accepts `focus`, `manual_call`, or `recording`, plus `lease_id` and `ttl_seconds`. Repeating the same ID and state renews it. Reusing the ID for another state is rejected.
+- `renew` accepts `lease_id` and `ttl_seconds`. It rejects absent, expired, or foreign leases.
+- `release` accepts `lease_id`. Releasing an already expired lease is idempotent and returns `released: false`.
+- `release_all` accepts no lease ID or TTL. It releases only Stream Deck leases.
+
+The reference client covers the complete contract:
+
+```bash
+python3 apps/founderos_input.py --context
+python3 apps/founderos_input.py --lease-action acquire --lease-id streamdeck.focus --state focus --ttl-seconds 300
+python3 apps/founderos_input.py --lease-action renew --lease-id streamdeck.focus --ttl-seconds 300
+python3 apps/founderos_input.py --lease-action release --lease-id streamdeck.focus
+python3 apps/founderos_input.py --lease-action release_all
+python3 apps/founderos_input.py ok
+python3 apps/founderos_input.py back
+```
+
+Clients should renew at half the TTL and treat a rejected renewal as an instruction to acquire a new lease explicitly. A physical button transport must implement the same signed contract. The permission hook falls back safely while no trusted transport exists.
+
+Trusted `event.open` does not invoke the browser inside the input handler. It creates an atomic mode `0600` record in a private outbox. The supervised consumer claims and validates the record, rejects records older than 5 minutes by default, opens only HTTPS or loopback HTTP URLs through `/usr/bin/open`, archives the result, and writes a content-free audit containing a URL hash. A process interruption after claim is marked indeterminate and is not replayed. Configure `action_consumer_max_age_seconds` only between 10 and 3600 seconds.
 
 ## Optional OpenAI fallback
 

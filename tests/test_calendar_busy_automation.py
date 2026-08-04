@@ -165,6 +165,160 @@ class CalendarBusyAutomationTests(unittest.TestCase):
         self.assertEqual(health["status"], "degraded")
         self.assertTrue(health["applied_busy"])
 
+    def test_failed_calendar_retry_does_not_recompute_the_last_snapshot(self) -> None:
+        target = RecordingTarget()
+        automation = CalendarBusyAutomation(target, off_delay_seconds=0)
+        try:
+            automation.reconcile(
+                [calendar_event()],
+                {
+                    "status": "healthy",
+                    "failures": 0,
+                    "last_success_at": NOW.isoformat(),
+                    "last_error": "",
+                },
+                NOW,
+                wait=True,
+            )
+            retrying = automation.reconcile(
+                [],
+                {
+                    "status": "polling",
+                    "failures": 1,
+                    "last_success_at": NOW.isoformat(),
+                    "last_error": "calendar retry in progress",
+                },
+                NOW + timedelta(hours=1),
+                wait=True,
+            )
+        finally:
+            automation.close()
+        self.assertEqual(retrying["status"], "degraded")
+        self.assertEqual(retrying["presence_state"], "meeting")
+        self.assertTrue(retrying["desired_busy"])
+        self.assertEqual(target.calls, [True])
+
+    def test_recording_release_cannot_override_a_stale_calendar_meeting(self) -> None:
+        target = RecordingTarget()
+        automation = CalendarBusyAutomation(target, off_delay_seconds=0)
+        try:
+            automation.occupancy.acquire(
+                "streamdeck.recording",
+                "recording",
+                60,
+                source="stream_deck",
+                now=NOW,
+            )
+            first = automation.reconcile(
+                [calendar_event()],
+                {"status": "healthy", "last_success_at": NOW.isoformat()},
+                NOW,
+                wait=True,
+            )
+            automation.occupancy.release(
+                "streamdeck.recording",
+                source="stream_deck",
+                now=NOW + timedelta(seconds=1),
+            )
+            stale = automation.reconcile(
+                [],
+                {"status": "stale", "last_success_at": NOW.isoformat()},
+                NOW + timedelta(seconds=1),
+                wait=True,
+            )
+        finally:
+            automation.close()
+        self.assertEqual(first["presence_state"], "recording")
+        self.assertEqual(stale["presence_state"], "meeting")
+        self.assertTrue(stale["desired_busy"])
+        self.assertEqual(target.calls, [True])
+
+    def test_manual_lease_can_expire_without_an_initial_calendar_snapshot(self) -> None:
+        target = RecordingTarget()
+        automation = CalendarBusyAutomation(
+            target,
+            off_delay_seconds=0,
+            lease_min_ttl_seconds=5,
+        )
+        try:
+            automation.occupancy.acquire(
+                "streamdeck.call",
+                "manual_call",
+                5,
+                source="stream_deck",
+                now=NOW,
+            )
+            automation.reconcile([], {"status": "starting"}, NOW, wait=True)
+            health = automation.reconcile(
+                [],
+                {"status": "starting"},
+                NOW + timedelta(seconds=6),
+                wait=True,
+            )
+        finally:
+            automation.close()
+        self.assertEqual(target.calls, [True, False])
+        self.assertEqual(health["presence_state"], "available")
+        self.assertFalse(health["applied_busy"])
+
+    def test_manual_lease_expiry_completes_delayed_off_without_calendar_snapshot(self) -> None:
+        target = RecordingTarget()
+        automation = CalendarBusyAutomation(
+            target,
+            off_delay_seconds=15,
+            lease_min_ttl_seconds=5,
+        )
+        try:
+            automation.occupancy.acquire(
+                "streamdeck.call",
+                "manual_call",
+                5,
+                source="stream_deck",
+                now=NOW,
+            )
+            automation.reconcile([], {"status": "starting"}, NOW, wait=True)
+            delayed = automation.reconcile(
+                [],
+                {"status": "starting"},
+                NOW + timedelta(seconds=6),
+                wait=True,
+            )
+            health = automation.reconcile(
+                [],
+                {"status": "starting"},
+                NOW + timedelta(seconds=22),
+                wait=True,
+            )
+        finally:
+            automation.close()
+        self.assertEqual(target.calls, [True, False])
+        self.assertTrue(delayed["applied_busy"])
+        self.assertEqual(health["presence_state"], "available")
+        self.assertFalse(health["applied_busy"])
+
+    def test_focus_never_activates_the_matter_switch(self) -> None:
+        target = RecordingTarget(state=False)
+        automation = CalendarBusyAutomation(target, off_delay_seconds=0)
+        try:
+            automation.occupancy.acquire(
+                "streamdeck.focus",
+                "focus",
+                60,
+                source="stream_deck",
+                now=NOW,
+            )
+            health = automation.reconcile(
+                [],
+                {"status": "healthy", "last_success_at": NOW.isoformat()},
+                NOW,
+                wait=True,
+            )
+        finally:
+            automation.close()
+        self.assertEqual(health["presence_state"], "focus")
+        self.assertFalse(health["desired_busy"])
+        self.assertEqual(target.calls, [False])
+
     def test_target_failure_is_bounded_and_visible_as_health_only(self) -> None:
         target = RecordingTarget(error=DisplayError("POST /api/smart_home/switch failed"))
         automation = CalendarBusyAutomation(target, force_wait_seconds=1)

@@ -1,0 +1,33 @@
+{
+  "name": "founderos-stream-deck-actions",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Thin Stream Deck client for the local FounderOS interaction bridge",
+  "engines": {
+    "node": ">=20.5.1"
+  },
+  "scripts": {
+    "icons": "node scripts/generate-icons.mjs",
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "rm -rf .test-build && tsc -p tsconfig.tests.json && node --test .test-build/tests/*.test.js",
+    "validate": "streamdeck validate --no-update-check com.yanndouchin.founderos-actions.sdPlugin",
+    "pack": "streamdeck pack --no-update-check --output dist com.yanndouchin.founderos-actions.sdPlugin",
+    "verify": "npm run check && npm test && npm run build && npm run validate"
+  },
+  "dependencies": {
+    "@elgato/streamdeck": "2.1.0"
+  },
+  "devDependencies": {
+    "@elgato/cli": "1.7.4",
+    "@rollup/plugin-commonjs": "28.0.8",
+    "@rollup/plugin-node-resolve": "16.0.1",
+    "@rollup/plugin-terser": "0.4.4",
+    "@rollup/plugin-typescript": "12.1.4",
+    "@types/node": "24.3.0",
+    "rollup": "4.46.2",
+    "tslib": "2.8.1",
+    "typescript": "5.9.2"
+  }
+}

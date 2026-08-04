@@ -70,6 +70,14 @@ def check_required_files() -> None:
         "founder_os/core/scheduler.py",
         "founder_os/automation/__init__.py",
         "founder_os/automation/calendar_busy.py",
+        "founder_os/automation/occupancy.py",
+        "founder_os/actions.py",
+        "docs/founderos/STREAM-DECK-SETUP.md",
+        "integrations/stream-deck/package-lock.json",
+        "integrations/stream-deck/action-contract.json",
+        "integrations/stream-deck/com.yanndouchin.founderos-actions.sdPlugin/manifest.json",
+        "integrations/stream-deck-profile/profile-plan.json",
+        "integrations/stream-deck-profile/streamdeck_profiles.py",
         "founder_os/closure/engine.py",
         "founder_os/closure/ledger.py",
         "founder_os/closure/models.py",
@@ -132,6 +140,14 @@ def check_runtime_dependencies() -> None:
         or "--source-only" not in workflow
     ):
         raise CheckFailure("CI does not prove the endpoint contract against pinned BarPilot source")
+    if (
+        "stream-deck:" not in workflow
+        or "npm run verify --prefix integrations/stream-deck" not in workflow
+        or "Verify the committed Stream Deck bundle is reproducible" not in workflow
+        or "git diff --exit-code" not in workflow
+        or "integrations/stream-deck-profile/tests" not in workflow
+    ):
+        raise CheckFailure("CI does not validate the Stream Deck integration")
 
 
 def check_bar_pilot_contract() -> None:
@@ -214,6 +230,7 @@ def check_calendar_busy_automation() -> None:
     if indicator.get("include_all_day") is not False:
         raise CheckFailure("all-day events must not activate the recording indicator by default")
     automation = (ROOT / "founder_os" / "automation" / "calendar_busy.py").read_text(encoding="utf-8")
+    occupancy = (ROOT / "founder_os" / "automation" / "occupancy.py").read_text(encoding="utf-8")
     display = (ROOT / "founder_os" / "display" / "busybar.py").read_text(encoding="utf-8")
     runtime = (ROOT / "founder_os" / "core" / "runtime.py").read_text(encoding="utf-8")
     calendar = (ROOT / "founder_os" / "connectors" / "calendar.py").read_text(encoding="utf-8")
@@ -222,6 +239,8 @@ def check_calendar_busy_automation() -> None:
         raise CheckFailure("Calendar occupancy is not connected to the BUSY Bar Matter switch contract")
     if "/api/busy/" in automation:
         raise CheckFailure("Calendar occupancy must not start a BUSY timer that blocks the display")
+    if not all(term in occupancy for term in ("recording", "release_all", "MATTER_BUSY_STATES")):
+        raise CheckFailure("multi-source presence leases are not governed by the Matter coordinator")
     if "source_events" not in runtime or "automation_health" not in runtime:
         raise CheckFailure("the runtime does not govern Calendar automation input and health")
     if "matter-status" not in controller:
@@ -366,6 +385,14 @@ def check_english_interface() -> None:
         "founder_os/connectors/gmail.py",
         "founder_os/connectors/linear.py",
         "founder_os/core/scheduler.py",
+        "integrations/stream-deck/src/actions.ts",
+        "integrations/stream-deck/src/domain.ts",
+        "integrations/stream-deck/src/visual.ts",
+        "integrations/stream-deck/com.yanndouchin.founderos-actions.sdPlugin/manifest.json",
+        "integrations/stream-deck/com.yanndouchin.founderos-actions.sdPlugin/bin/plugin.js",
+        "integrations/stream-deck/com.yanndouchin.founderos-actions.sdPlugin/ui/presence.html",
+        "integrations/stream-deck-profile/profile-plan.json",
+        "integrations/stream-deck-profile/streamdeck_profiles.py",
     )
     text = "\n".join((ROOT / name).read_text(encoding="utf-8") for name in paths)
     forbidden = (
@@ -382,6 +409,15 @@ def check_english_interface() -> None:
         "secret masqué",
         "Refusé depuis",
         "décision à valider",
+        "Ouvrir\\npriorité",
+        "Reporter\\n15 min",
+        "Maintenir\\nTraiter",
+        "Préparer\\nappel",
+        "Libérer les états manuels",
+        "Lumières de travail",
+        "Suivi\\ncaméra",
+        "Démarrer REC",
+        "Voix",
     )
     found = [phrase for phrase in forbidden if phrase in text]
     if found:
@@ -389,7 +425,9 @@ def check_english_interface() -> None:
 
 
 def check_character_integrity() -> None:
-    suffixes = {".py", ".md", ".json", ".yml", ".yaml", ".js", ".vue"}
+    suffixes = {
+        ".py", ".md", ".json", ".yml", ".yaml", ".js", ".ts", ".html", ".svg", ".zsh", ".vue"
+    }
     ignored_parts = {"node_modules", ".git", "dist", "public"}
     process = subprocess.run(
         ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],

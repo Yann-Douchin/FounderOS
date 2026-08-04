@@ -44,7 +44,9 @@
       "require_pairing": true,
       "include_all_day": false,
       "include_tentative": true,
-      "off_delay_seconds": 15
+      "off_delay_seconds": 15,
+      "lease_min_ttl_seconds": 5,
+      "lease_max_ttl_seconds": 28800
     }
   },
   "interaction": {

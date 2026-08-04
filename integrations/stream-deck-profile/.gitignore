@@ -1,0 +1,6 @@
+__pycache__/
+*.pyc
+dist-private/
+.icloud-placeholder
+*.icloud-placeholder
+.gitignore.icloud-placeholder

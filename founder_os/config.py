@@ -61,6 +61,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
             "retry_seconds": 5.0,
             "retry_max_seconds": 60.0,
             "force_wait_seconds": 15.0,
+            "lease_min_ttl_seconds": 5.0,
+            "lease_max_ttl_seconds": 28_800.0,
         },
     },
     "closure": {
@@ -136,6 +138,10 @@ DEFAULT_CONFIG: dict[str, Any] = {
         "snooze_minutes": 15,
         "action_outbox_path": str(state_root() / "actions"),
         "action_outbox_max_pending": 1000,
+        "action_consumer_enabled": True,
+        "action_consumer_poll_seconds": 0.5,
+        "action_consumer_max_history": 1000,
+        "action_consumer_max_age_seconds": 300.0,
         "reconnect_seconds": 1.0,
     },
     "ranking": {
@@ -582,6 +588,19 @@ def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = Non
         raise ConfigError("automations.calendar_busy_indicator.retry_max_seconds must not be below retry_seconds")
     if float(calendar_indicator.get("force_wait_seconds", 0)) <= 0:
         raise ConfigError("automations.calendar_busy_indicator.force_wait_seconds must be positive")
+    if float(calendar_indicator.get("lease_min_ttl_seconds", 0)) < 1:
+        raise ConfigError("automations.calendar_busy_indicator.lease_min_ttl_seconds must be at least 1")
+    if float(calendar_indicator.get("lease_max_ttl_seconds", 0)) < float(
+        calendar_indicator.get("lease_min_ttl_seconds", 0)
+    ):
+        raise ConfigError(
+            "automations.calendar_busy_indicator.lease_max_ttl_seconds must not be below "
+            "lease_min_ttl_seconds"
+        )
+    if float(calendar_indicator.get("lease_max_ttl_seconds", 0)) > 86_400:
+        raise ConfigError(
+            "automations.calendar_busy_indicator.lease_max_ttl_seconds cannot exceed 86400"
+        )
     indicator_host = str(calendar_indicator.get("host") or display_host)
     parsed_indicator = urlsplit(indicator_host if "://" in indicator_host else "http://" + indicator_host)
     if parsed_indicator.scheme not in {"http", "https"} or not parsed_indicator.hostname:
@@ -608,12 +627,47 @@ def _validate(config: Mapping[str, Any], *, secrets: SecretResolver | None = Non
             raise ConfigError("interaction.secret_env is required for signed_http")
         if float(interaction["max_clock_skew_seconds"]) <= 0:
             raise ConfigError("interaction.max_clock_skew_seconds must be positive")
-    if str(interaction["allow_key"]).strip() == str(interaction["deny_key"]).strip():
+    action_keys = {
+        name: str(interaction[name]).strip().lower()
+        for name in (
+            "allow_key",
+            "deny_key",
+            "acknowledge_key",
+            "snooze_key",
+            "open_key",
+        )
+    }
+    invalid_action_keys = [
+        name
+        for name, value in action_keys.items()
+        if not re.fullmatch(r"[a-z0-9_-]{1,32}", value)
+    ]
+    if invalid_action_keys:
+        raise ConfigError(
+            f"interaction action keys must use 1 to 32 URL-safe lowercase characters: "
+            f"{invalid_action_keys}"
+        )
+    if action_keys["allow_key"] == action_keys["deny_key"]:
         raise ConfigError("interaction allow and deny keys must differ")
+    normal_action_keys = {
+        action_keys["acknowledge_key"],
+        action_keys["snooze_key"],
+        action_keys["open_key"],
+    }
+    if len(normal_action_keys) != 3:
+        raise ConfigError("interaction acknowledge, snooze, and open keys must differ")
     if float(interaction["reconnect_seconds"]) <= 0:
         raise ConfigError("interaction.reconnect_seconds must be positive")
     if int(interaction["action_outbox_max_pending"]) < 1:
         raise ConfigError("interaction.action_outbox_max_pending must be positive")
+    if not isinstance(interaction.get("action_consumer_enabled"), bool):
+        raise ConfigError("interaction.action_consumer_enabled must be boolean")
+    if float(interaction.get("action_consumer_poll_seconds", 0)) <= 0:
+        raise ConfigError("interaction.action_consumer_poll_seconds must be positive")
+    if int(interaction.get("action_consumer_max_history", 0)) < 1:
+        raise ConfigError("interaction.action_consumer_max_history must be positive")
+    if not 10 <= float(interaction.get("action_consumer_max_age_seconds", 0)) <= 3600:
+        raise ConfigError("interaction.action_consumer_max_age_seconds must be between 10 and 3600")
     if float(runtime["tick_seconds"]) <= 0:
         raise ConfigError("runtime.tick_seconds must be positive")
     if float(runtime["refresh_seconds"]) <= 0:
