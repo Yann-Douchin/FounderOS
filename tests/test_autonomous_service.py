@@ -614,8 +614,9 @@ class AutonomousServiceTests(unittest.TestCase):
             installed = destination.exists()
         self.assertEqual(bootstrap_attempts, 6)
         self.assertEqual(delays, [0.5, 1.0, 2.0, 4.0, 4.0])
-        self.assertIn(("kickstart", "gui/501/com.founderos.runtime"), calls)
-        self.assertNotIn(("kickstart", "-k", "gui/501/com.founderos.runtime"), calls)
+        target = f"gui/{os.getuid()}/com.founderos.runtime"
+        self.assertIn(("kickstart", target), calls)
+        self.assertNotIn(("kickstart", "-k", target), calls)
         self.assertTrue(installed)
 
     def test_failed_readiness_rolls_back_runtime_then_emulator(self) -> None:
