@@ -664,6 +664,91 @@ class AutonomousServiceTests(unittest.TestCase):
                     founderosctl._service_command(args, config, root / "source.json")
         self.assertEqual(restored, [LAUNCH_AGENT_LABEL, EMULATOR_LAUNCH_AGENT_LABEL])
 
+    def test_upgrade_preflight_accepts_only_fresh_supervised_health(self) -> None:
+        config = {
+            "operations": {
+                "health_path": "/private/tmp/founderos-health.json",
+                "heartbeat_seconds": 15,
+            },
+        }
+        ready = SimpleNamespace(
+            loaded=True,
+            pid=321,
+            health="running",
+            health_pid=321,
+            display_healthy=True,
+            connectors_healthy=True,
+            automations_healthy=True,
+        )
+        with patch.object(
+            founderosctl,
+            "service_status",
+            return_value=ready,
+        ) as status, patch.object(founderosctl.subprocess, "run") as run:
+            founderosctl._preflight(Path("config.json"), config)
+        status.assert_called_once_with(
+            health_path=Path("/private/tmp/founderos-health.json"),
+            stale_after_seconds=90.0,
+        )
+        run.assert_not_called()
+
+    def test_first_install_preflight_still_requires_a_live_poll(self) -> None:
+        config = {
+            "operations": {
+                "health_path": "/private/tmp/founderos-health.json",
+                "heartbeat_seconds": 15,
+            },
+        }
+        absent = SimpleNamespace(
+            loaded=False,
+            pid=None,
+            health="not_loaded",
+            health_pid=None,
+            display_healthy=None,
+            connectors_healthy=None,
+            automations_healthy=None,
+        )
+        completed = SimpleNamespace(returncode=0)
+        with patch.object(
+            founderosctl,
+            "service_status",
+            return_value=absent,
+        ), patch.object(
+            founderosctl.subprocess,
+            "run",
+            return_value=completed,
+        ) as run:
+            founderosctl._preflight(Path("config.json"), config)
+        run.assert_called_once()
+        self.assertIn("--require-healthy", run.call_args.args[0])
+
+    def test_failed_live_preflight_is_not_hidden_by_unhealthy_service(self) -> None:
+        config = {
+            "operations": {
+                "health_path": "/private/tmp/founderos-health.json",
+                "heartbeat_seconds": 15,
+            },
+        }
+        degraded = SimpleNamespace(
+            loaded=True,
+            pid=321,
+            health="running",
+            health_pid=321,
+            display_healthy=True,
+            connectors_healthy=False,
+            automations_healthy=True,
+        )
+        with patch.object(
+            founderosctl,
+            "service_status",
+            return_value=degraded,
+        ), patch.object(
+            founderosctl.subprocess,
+            "run",
+            return_value=SimpleNamespace(returncode=3),
+        ), self.assertRaisesRegex(ServiceError, "exit code 3"):
+            founderosctl._preflight(Path("config.json"), config)
+
     def test_emulator_launch_agent_is_loopback_only_and_contains_no_secret(self) -> None:
         with tempfile.TemporaryDirectory() as folder:
             root = Path(folder)
