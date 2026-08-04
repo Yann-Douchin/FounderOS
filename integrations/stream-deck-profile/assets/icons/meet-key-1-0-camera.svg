@@ -5,16 +5,17 @@
     <stop offset="1" stop-color="#152235"/>
   </linearGradient>
   <radialGradient id="halo" cx="84%" cy="12%" r="70%">
-    <stop offset="0" stop-color="#4EA1FF" stop-opacity=".24"/>
-    <stop offset="1" stop-color="#4EA1FF" stop-opacity="0"/>
+    <stop offset="0" stop-color="#FFB14E" stop-opacity=".24"/>
+    <stop offset="1" stop-color="#FFB14E" stop-opacity="0"/>
   </radialGradient>
 </defs>
 <rect x="3" y="3" width="138" height="138" rx="27" fill="url(#background)" stroke="#293B51" stroke-width="2"/>
 <rect x="3" y="3" width="138" height="138" rx="27" fill="url(#halo)"/>
-<path d="M54 13h36" stroke="#4EA1FF" stroke-width="5" stroke-linecap="round"/>
-<circle cx="119" cy="24" r="5" fill="#4EA1FF"/>
+<path d="M54 13h36" stroke="#FFB14E" stroke-width="5" stroke-linecap="round"/>
+<circle cx="119" cy="24" r="5" fill="#FFB14E"/>
 <g transform="translate(0 -5)" fill="none" stroke="#F7FAFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-<rect x="40" y="42" width="64" height="48" rx="12" opacity=".36"/>
-<path d="M57 76l31-31M71 45h17v17"/>
+<rect x="37" y="45" width="59" height="42" rx="10"/>
+<path d="M96 57l13-8v34l-13-8z"/>
+<circle cx="66" cy="66" r="8" fill="#FFB14E" stroke="none"/>
 </g>
 </svg>

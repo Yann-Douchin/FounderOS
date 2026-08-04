@@ -14,7 +14,8 @@
 <path d="M54 13h36" stroke="#FFB14E" stroke-width="5" stroke-linecap="round"/>
 <circle cx="119" cy="24" r="5" fill="#FFB14E"/>
 <g transform="translate(0 -5)" fill="none" stroke="#F7FAFF" stroke-width="7" stroke-linecap="round" stroke-linejoin="round">
-<path d="M48 39l12 17-9 7c5 10 12 18 23 23l7-10 18 11-5 10c-3 6-10 8-16 6-23-7-41-25-48-48-2-6 0-13 6-16z"/>
-<path d="M91 40v18M82 49h18" opacity=".74"/>
+<rect x="37" y="46" width="59" height="42" rx="10"/>
+<path d="M96 58l13-8v34l-13-8z"/>
+<path d="M51 35v20M41 45h20" opacity=".74"/>
 </g>
 </svg>

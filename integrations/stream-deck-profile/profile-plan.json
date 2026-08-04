@@ -13,7 +13,7 @@
       "name": "FounderOS Cockpit",
       "keys": [
         ["Open priority", "Snooze 15 min", "Acknowledge, hold", "Focus 50"],
-        ["Capture", "Prepare call", "Studio", "Finish, hold"]
+        ["Capture", "Prepare Meet", "Studio", "Finish, hold"]
       ],
       "dials": [
         "Volume and output",
@@ -24,10 +24,10 @@
     },
     "call": {
       "device": "streamDeckPlus",
-      "name": "FounderOS Call",
+      "name": "FounderOS Meet",
       "keys": [
-        ["Microphone", "Camera tracking", "ScreenBrush", "Notes"],
-        ["Lights", "Prompter", "Priority", "End, hold"]
+        ["Meet microphone", "Meet camera", "ScreenBrush", "Notes"],
+        ["Lights", "Camera tracking", "Prompter", "End, hold"]
       ]
     },
     "studio": {

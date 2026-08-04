@@ -79,7 +79,6 @@ DISALLOWED_PLUGIN_UUIDS = (
     "com.microsoft.teams",
 )
 SMART_PROFILE_APPS = {
-    "call": "/Applications/zoom.us.app",
     "studio": "/Applications/OBS.app",
 }
 TARGET_STREAM_DECK_VERSION = "7.5.1"
@@ -97,34 +96,34 @@ PROFILE_ICON_FILES = {
         "cockpit-key-2-0-priority-handle.png",
         "cockpit-key-3-0-focus-50.png",
         "cockpit-key-0-1-things-capture.png",
-        "cockpit-key-1-1-prepare-call.png",
+        "cockpit-key-1-1-prepare-meet.png",
         "cockpit-key-2-1-open-studio.png",
         "cockpit-key-3-1-end-session.png",
         "cockpit-dial-0-output-volume.png",
         "cockpit-dial-1-yeti-input.png",
         "cockpit-dial-2-work-lights.png",
         "cockpit-dial-3-mode-wheel.png",
-        "cockpit-wheel-0-call.png",
+        "cockpit-wheel-0-meet.png",
         "cockpit-wheel-1-studio.png",
         "cockpit-wheel-2-writing.png",
         "cockpit-wheel-3-presentation.png",
         "cockpit-wheel-4-home.png",
     ),
     "call": (
-        "call-key-0-0-mic-mute.png",
-        "call-key-1-0-face-tracking.png",
-        "call-key-2-0-screenbrush.png",
-        "call-key-3-0-notes.png",
-        "call-key-0-1-lights.png",
-        "call-key-1-1-prompter-inactive.png",
-        "call-key-1-1-prompter-active.png",
-        "call-key-2-1-priority-open.png",
-        "call-key-3-1-end-call.png",
-        "call-dial-0-yeti-gain.png",
-        "call-dial-1-output-volume.png",
-        "call-dial-2-video-lights.png",
-        "call-dial-3-prompter-inactive.png",
-        "call-dial-3-prompter-active.png",
+        "meet-key-0-0-microphone.png",
+        "meet-key-1-0-camera.png",
+        "meet-key-2-0-screenbrush.png",
+        "meet-key-3-0-notes.png",
+        "meet-key-0-1-lights.png",
+        "meet-key-1-1-camera-tracking.png",
+        "meet-key-2-1-prompter-inactive.png",
+        "meet-key-2-1-prompter-active.png",
+        "meet-key-3-1-end.png",
+        "meet-dial-0-yeti-gain.png",
+        "meet-dial-1-output-volume.png",
+        "meet-dial-2-video-lights.png",
+        "meet-dial-3-prompter-inactive.png",
+        "meet-dial-3-prompter-active.png",
     ),
     "studio": (
         "studio-key-0-0-prepare-lights.png",
@@ -565,6 +564,49 @@ def _option_space_hotkey(title: str, image: str | None = None) -> dict[str, Any]
             "NativeCode": 49,
             "QTKeyCode": 32,
             "VKeyCode": 49,
+        }
+    )
+    return _action(
+        "com.elgato.streamdeck.system.hotkey",
+        "Hotkey",
+        title,
+        settings={
+            "Coalesce": True,
+            "Hotkeys": [first, _null_hotkey(), _null_hotkey(), _null_hotkey()],
+        },
+        image=image,
+    )
+
+
+def _command_letter_hotkey(
+    letter: str,
+    title: str,
+    image: str | None = None,
+) -> dict[str, Any]:
+    """Return a Command shortcut using French AZERTY physical key codes.
+
+    Google Meet uses Command+D for the microphone and Command+E for the
+    camera on macOS. D and E map to Carbon key codes 2 and 14 respectively on
+    Yann's French AZERTY keyboard. QTKeyCode keeps the logical uppercase
+    character expected by Stream Deck.
+    """
+
+    keycodes = {
+        "d": (2, 68),
+        "e": (14, 69),
+    }
+    normalized = letter.casefold()
+    if normalized not in keycodes:
+        raise ProfileError(f"Unsupported Command letter: {letter}")
+    native, qt = keycodes[normalized]
+    first = _null_hotkey()
+    first.update(
+        {
+            "KeyCmd": True,
+            "KeyModifiers": 8,
+            "NativeCode": native,
+            "QTKeyCode": qt,
+            "VKeyCode": native,
         }
     )
     return _action(
@@ -1039,6 +1081,13 @@ class ProfileBuilder:
             )
 
         self.validate(live_root)
+        expected_exports = {item.export_path.name for item in built}
+        for existing_export in export_root.glob("*.streamDeckProfile"):
+            if existing_export.name in expected_exports:
+                continue
+            if existing_export.is_symlink() or not existing_export.is_file():
+                raise ProfileError(f"Irregular stale export: {existing_export}")
+            existing_export.unlink()
         report = {
             "schemaVersion": 1,
             "createdAt": datetime.now(timezone.utc).isoformat(),
@@ -1247,16 +1296,17 @@ class ProfileBuilder:
             "Capture",
             self._icon(icons, "cockpit-key-0-1-things-capture"),
         )
-        prepare_call = _multi_action(
-            "Prepare\ncall",
+        prepare_meet = _multi_action(
+            "Prepare\nMeet",
             [
+                [_open_app("/Applications/Arc.app", "Open Arc")],
                 [
                     self._presence("manualCallStart", "Manual call"),
                     *self._recording_light_actions(),
                 ],
-                [_switch_profile(PROFILE_IDS["call"], "Call mode", device_uuid=device_uuid)],
+                [_switch_profile(PROFILE_IDS["call"], "Meet mode", device_uuid=device_uuid)],
             ],
-            self._icon(icons, "cockpit-key-1-1-prepare-call"),
+            self._icon(icons, "cockpit-key-1-1-prepare-meet"),
         )
         studio = _multi_action(
             "Studio",
@@ -1284,8 +1334,8 @@ class ProfileBuilder:
             [
                 _switch_profile(
                     PROFILE_IDS["call"],
-                    "Call",
-                    self._icon(icons, "cockpit-wheel-0-call"),
+                    "Meet",
+                    self._icon(icons, "cockpit-wheel-0-meet"),
                     device_uuid=device_uuid,
                 ),
                 _switch_profile(
@@ -1319,7 +1369,7 @@ class ProfileBuilder:
                 "2,0": acknowledge,
                 "3,0": focus,
                 "0,1": capture,
-                "1,1": prepare_call,
+                "1,1": prepare_meet,
                 "2,1": studio,
                 "3,1": finish,
             },
@@ -1336,25 +1386,30 @@ class ProfileBuilder:
         )
 
     def _call_page(self, icons: Mapping[str, str], device_uuid: str) -> dict[str, Any]:
-        micro = self._input_control(
-            "Microphone",
-            keypad=True,
-            image=self._icon(icons, "call-key-0-0-mic-mute"),
+        micro = _command_letter_hotkey(
+            "d",
+            "Meet\nmic",
+            self._icon(icons, "meet-key-0-0-microphone"),
+        )
+        camera = _command_letter_hotkey(
+            "e",
+            "Meet\ncamera",
+            self._icon(icons, "meet-key-1-0-camera"),
         )
         tracking = self.catalog.clone_action(
             title="Face Tracking",
             new_title="Camera\ntracking",
-            image=self._icon(icons, "call-key-1-0-face-tracking"),
+            image=self._icon(icons, "meet-key-1-1-camera-tracking"),
         )
         screenbrush = self.catalog.clone_action(
             title="ScreenBrush",
             new_title="ScreenBrush",
-            image=self._icon(icons, "call-key-2-0-screenbrush"),
+            image=self._icon(icons, "meet-key-2-0-screenbrush"),
         )
         notes = _website(
             "things:///add?show-quick-entry=true",
             "Notes",
-            self._icon(icons, "call-key-3-0-notes"),
+            self._icon(icons, "meet-key-3-0-notes"),
         )
         lights = _multi_action(
             "Lights",
@@ -1362,7 +1417,7 @@ class ProfileBuilder:
                 self._presence("manualCallStart", "Start or renew call"),
                 *self._recording_light_actions(),
             ]],
-            self._icon(icons, "call-key-0-1-lights"),
+            self._icon(icons, "meet-key-0-1-lights"),
         )
         prompter = self.catalog.clone_action(
             name="Prompter Control",
@@ -1372,14 +1427,9 @@ class ProfileBuilder:
         _set_state_images(
             prompter,
             [
-                self._icon(icons, "call-key-1-1-prompter-inactive"),
-                self._icon(icons, "call-key-1-1-prompter-active"),
+                self._icon(icons, "meet-key-2-1-prompter-inactive"),
+                self._icon(icons, "meet-key-2-1-prompter-active"),
             ],
-        )
-        priority = self._founderos_action(
-            "open",
-            "Open\npriority",
-            self._icon(icons, "call-key-2-1-priority-open"),
         )
         end_steps = [
             [self._presence("manualCallStop", "End call")],
@@ -1389,13 +1439,13 @@ class ProfileBuilder:
         end = _hold_action(
             "Hold\nEnd",
             _multi_action("End", end_steps),
-            self._icon(icons, "call-key-3-1-end-call"),
+            self._icon(icons, "meet-key-3-1-end"),
         )
         hue = self.catalog.clone_action(
             title="Recording Lights Brightness",
             action_uuid="com.elgato.philips-hue.brightness",
             new_title="Video lights",
-            image=self._icon(icons, "call-dial-2-video-lights"),
+            image=self._icon(icons, "meet-dial-2-video-lights"),
         )
         prompter_dial = self.catalog.clone_action(
             name="Prompter Control",
@@ -1405,28 +1455,28 @@ class ProfileBuilder:
         _set_state_images(
             prompter_dial,
             [
-                self._icon(icons, "call-dial-3-prompter-inactive"),
-                self._icon(icons, "call-dial-3-prompter-active"),
+                self._icon(icons, "meet-dial-3-prompter-inactive"),
+                self._icon(icons, "meet-dial-3-prompter-active"),
             ],
         )
         return self._page(
             keypad={
                 "0,0": micro,
-                "1,0": tracking,
+                "1,0": camera,
                 "2,0": screenbrush,
                 "3,0": notes,
                 "0,1": lights,
-                "1,1": prompter,
-                "2,1": priority,
+                "1,1": tracking,
+                "2,1": prompter,
                 "3,1": end,
             },
             encoders={
                 "0,0": self._input_control(
                     "Yeti X gain",
-                    image=self._icon(icons, "call-dial-0-yeti-gain"),
+                    image=self._icon(icons, "meet-dial-0-yeti-gain"),
                 ),
                 "1,0": self._output_dial(
-                    self._icon(icons, "call-dial-1-output-volume")
+                    self._icon(icons, "meet-dial-1-output-volume")
                 ),
                 "2,0": hue,
                 "3,0": prompter_dial,
@@ -1654,6 +1704,12 @@ class ProfileBuilder:
         icon_assets: Mapping[str, Path],
     ) -> dict[str, str]:
         icon_root = live_root / f".{key}-icons"
+        if icon_root.is_symlink():
+            raise ProfileError(f"Profile icon directory cannot be a symbolic link: {icon_root}")
+        if icon_root.exists():
+            if not icon_root.is_dir():
+                raise ProfileError(f"Profile icon path is not a directory: {icon_root}")
+            shutil.rmtree(icon_root)
         icon_root.mkdir(parents=True, exist_ok=True)
         icon_root.chmod(0o700)
         result: dict[str, str] = {}
@@ -1947,6 +2003,60 @@ class ProfileBuilder:
                 first.get(field) != expected for field, expected in expected_modifiers.items()
             ):
                 problems.append("Inconsistent superwhisper Option+Space shortcut")
+        meet_page = _read_json(
+            found["call"] / "Profiles" / PAGE_IDS["call"] / "manifest.json"
+        )
+        meet_shortcuts = {
+            "Meet\nmic": {
+                "KeyCmd": True,
+                "KeyCtrl": False,
+                "KeyModifiers": 8,
+                "KeyOption": False,
+                "KeyShift": False,
+                "NativeCode": 2,
+                "QTKeyCode": 68,
+                "VKeyCode": 2,
+            },
+            "Meet\ncamera": {
+                "KeyCmd": True,
+                "KeyCtrl": False,
+                "KeyModifiers": 8,
+                "KeyOption": False,
+                "KeyShift": False,
+                "NativeCode": 14,
+                "QTKeyCode": 69,
+                "VKeyCode": 14,
+            },
+        }
+        for title, expected_shortcut in meet_shortcuts.items():
+            matching = [
+                action
+                for action in _iter_actions(meet_page)
+                if action.get("UUID") == "com.elgato.streamdeck.system.hotkey"
+                and title in _action_titles(action)
+            ]
+            if len(matching) != 1:
+                problems.append(f"Missing or duplicate Google Meet shortcut: {title}")
+                continue
+            hotkeys = matching[0].get("Settings", {}).get("Hotkeys", [])
+            first = hotkeys[0] if isinstance(hotkeys, list) and hotkeys else {}
+            if not isinstance(first, dict) or any(
+                first.get(field) != expected
+                for field, expected in expected_shortcut.items()
+            ):
+                problems.append(f"Inconsistent Google Meet shortcut: {title}")
+        cockpit_page = _read_json(
+            found["cockpit"] / "Profiles" / PAGE_IDS["cockpit"] / "manifest.json"
+        )
+        arc_actions = [
+            action
+            for action in _iter_actions(cockpit_page)
+            if action.get("UUID") == "com.elgato.streamdeck.system.open"
+            and action.get("Settings", {}).get("path")
+            == json.dumps("/Applications/Arc.app", ensure_ascii=False)
+        ]
+        if len(arc_actions) != 1:
+            problems.append("Prepare Meet must activate Arc exactly once")
         all_text = "\n".join(
             path.read_text(encoding="utf-8")
             for profile in found.values()

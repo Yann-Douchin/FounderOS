@@ -35,24 +35,28 @@ Manual states are temporary leases. They expire automatically if the end action 
 | Top 3 | Acknowledge after a hold, or become `Allow` during a permission request |
 | Top 4 | Focus for 50 minutes |
 | Bottom 1 | Open Things Quick Entry |
-| Bottom 2 | Acquire call mode, prepare video lights, and open the Call profile |
+| Bottom 2 | Activate Arc, acquire call mode, prepare video lights, and open the Meet profile |
 | Bottom 3 | Open OBS and the Studio profile |
 | Bottom 4 | After a hold, release manual modes and restore task lights |
 | Dial 1 | Default audio output and volume |
 | Dial 2 | Default input gain and mute, currently the Yeti X |
 | Dial 3 | Task-light brightness |
-| Dial 4 | Action wheel for Call, Studio, Notion, Keynote, and Home |
+| Dial 4 | Action wheel for Meet, Studio, Notion, Keynote, and Home |
 
-### FounderOS Call, Zoom Smart Profile
+### FounderOS Meet, manual Arc profile
 
-Bringing Zoom to the foreground automatically selects this profile. The `Lights` action also acquires or renews the call lease. The profile therefore remains reliable when Zoom was opened without using `Prepare call`.
+[Elgato Smart Profiles](https://help.elgato.com/hc/en-us/articles/360053419071-Elgato-Stream-Deck-Smart-Profiles) match the foreground application, not a browser tab. Because Google Meet runs in Arc, binding this profile to Arc would replace Cockpit during every ordinary browsing session. FounderOS Meet is therefore entered explicitly with `Prepare Meet`.
+
+`Prepare Meet` brings the current Arc window forward, acquires the manual call lease, prepares video lights, and opens the Meet profile. It deliberately does not navigate to a generic Meet home page, so the real Calendar or invitation link remains the meeting entry point. The `Lights` action can renew the lease when needed.
 
 | Keys | Dials |
 |---|---|
-| Microphone, camera tracking, ScreenBrush, Things notes | Yeti X gain |
-| Call lights and presence, Prompter, open priority, end after a hold | Audio output, video-light brightness, Prompter |
+| Meet microphone, Meet camera, ScreenBrush, Things notes | Yeti X gain |
+| Call lights and presence, camera tracking, Prompter, finish after a hold | Audio output, video-light brightness, Prompter |
 
-`End` releases the manual call, restores task lighting, and returns to Cockpit.
+The microphone key sends Command+D and the camera key sends Command+E, which are the [official Google Meet shortcuts on macOS](https://support.google.com/meet/answer/9298571?hl=en-GB). Their physical key codes are validated for Yann's French AZERTY keyboard.
+
+After leaving the meeting in Arc, `End` releases the manual call, restores task lighting, and returns to Cockpit. It deliberately does not send Command+W because focus may have moved to another Arc tab.
 
 ### FounderOS Studio, OBS Smart Profile
 
@@ -92,7 +96,7 @@ Left and Right arrows are independent of the AZERTY layout.
 
 Every visible action has a dedicated icon from one shared FounderOS system. The five profiles embed 60 static PNG files, each paired with an editable SVG master. This covers all keys, Pedal switches, iPhone keys, dials, Action Wheel choices, Dial Stack choices, and the active or inactive variants used by Prompter and recording controls.
 
-The suite follows one 144 x 144 pixel grid with a midnight-blue rounded tile, a text-free white glyph, a uniform rounded stroke, and a functional accent color. FounderOS actions are blue, focus is purple, capture is green, calls are amber, studio and risky actions are red, presentations are cyan, and neutral hardware controls use slate blue. Titles remain native Stream Deck text so labels stay editable and legible.
+The suite follows one 144 x 144 pixel grid with a midnight-blue rounded tile, a text-free white glyph, a uniform rounded stroke, and a functional accent color. FounderOS actions are blue, focus is purple, capture is green, Meet is amber, studio and risky actions are red, presentations are cyan, and neutral hardware controls use slate blue. Titles remain native Stream Deck text so labels stay editable and legible.
 
 [Elgato specifies](https://docs.elgato.com/stream-deck/icons/getting-started/) 144 x 144 pixels for Stream Deck key and dial icons, supports SVG and PNG for static assets, and recommends keeping assets under 1 MB. Stream Deck scales this format across compatible devices. The custom quarter-screen [touch-strip canvas](https://docs.elgato.com/streamdeck/sdk/references/touch-strip-layout/) is a separate 200 x 100 pixel surface, so third-party dial layouts remain under their owning plugins rather than being replaced by decorative backgrounds.
 
@@ -104,7 +108,7 @@ The configuration intentionally centers on a few complete gestures:
 
 - when an idea arrives, use the center pedal or `Capture`
 - when a FounderOS priority arrives, use `Open`, `Snooze`, or hold `Acknowledge`
-- when a call starts, use `Prepare call`, with no further preparation required
+- when a Meet call starts, open its Calendar or invitation link, then use `Prepare Meet`
 - when a recording starts, use `Studio`, `Prepare`, then hold `Start REC`
 - when focused work starts, use `Focus 50`
 - when the day or a manual mode ends, hold `Finish`
@@ -170,8 +174,8 @@ python3 integrations/stream-deck-profile/streamdeck_profiles.py rollback \
 
 ## Dependencies and maintenance
 
-The active profiles depend on FounderOS Actions, Volume Controller, Philips Hue, Camera Hub, and OBS Studio. They do not depend on the former Zoom or Teams plugins.
+The active profiles depend on FounderOS Actions, Volume Controller, Philips Hue, Camera Hub, and OBS Studio. Meet controls use built-in Stream Deck hotkeys, so no Zoom or Teams plugin is required.
 
-The current official Zoom plugin and Marketplace updates require an Elgato session. They can be added later without changing the core Call profile behavior.
+OBS is the only application-bound Smart Profile. FounderOS Meet remains manual because Arc hosts both meetings and ordinary browsing.
 
-Smart Profiles do not switch automatically while the Stream Deck configuration window itself is in the foreground. Close or hide that window when testing Zoom and OBS switching.
+Smart Profiles do not switch automatically while the Stream Deck configuration window itself is in the foreground. Close or hide that window when testing OBS switching. Test Meet by pressing `Prepare Meet`, confirming Arc activation, and then using the microphone and camera keys inside an active Meet call.
