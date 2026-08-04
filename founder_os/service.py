@@ -29,7 +29,9 @@ _IGNORED_RUNTIME_DIRECTORIES = {"__pycache__", ".bin"}
 _IGNORED_RUNTIME_FILES = {".DS_Store"}
 _IGNORED_RUNTIME_SUFFIXES = {".pyc", ".pyo"}
 _IGNORED_RUNTIME_SUBTREES: set[Path] = set()
-_LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 3
+_LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 7
+_LAUNCHCTL_BOOTSTRAP_DELAY_SECONDS = 0.5
+_LAUNCHCTL_BOOTSTRAP_DELAY_MAX_SECONDS = 4.0
 _MINIMUM_NODE_VERSION = (20, 9, 0)
 
 
@@ -351,7 +353,7 @@ def restore_launch_agent(snapshot: LaunchAgentSnapshot) -> None:
     if snapshot.loaded:
         _bootstrap_launch_agent(domain, snapshot.label, destination)
         _run_launchctl("enable", f"{domain}/{snapshot.label}")
-        _run_launchctl("kickstart", "-k", f"{domain}/{snapshot.label}")
+        _run_launchctl("kickstart", f"{domain}/{snapshot.label}")
 
 
 def uninstall_launch_agent() -> bool:
@@ -694,7 +696,7 @@ def _replace_launch_agent(label: str, payload: Mapping[str, Any]) -> Path:
         _run_launchctl("bootout", f"{domain}/{label}", allowed_codes={0, 3, 113})
         _bootstrap_launch_agent(domain, label, destination)
         _run_launchctl("enable", f"{domain}/{label}")
-        _run_launchctl("kickstart", "-k", f"{domain}/{label}")
+        _run_launchctl("kickstart", f"{domain}/{label}")
     except (OSError, ServiceError) as exc:
         try:
             restore_launch_agent(snapshot)
@@ -750,9 +752,14 @@ def _bootstrap_launch_agent(domain: str, label: str, destination: Path) -> None:
             if attempt + 1 >= _LAUNCHCTL_BOOTSTRAP_ATTEMPTS:
                 break
             _run_launchctl("bootout", f"{domain}/{label}", allowed_codes={0, 3, 113})
-            time.sleep(0.25 * (2 ** attempt))
+            time.sleep(
+                min(
+                    _LAUNCHCTL_BOOTSTRAP_DELAY_MAX_SECONDS,
+                    _LAUNCHCTL_BOOTSTRAP_DELAY_SECONDS * (2 ** attempt),
+                )
+            )
     if latest_error is not None:
-        raise latest_error
+        raise ServiceError(f"{label}: {latest_error}") from latest_error
     raise ServiceError(f"launchctl bootstrap did not run: {label}")
 
 

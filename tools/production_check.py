@@ -295,9 +295,10 @@ def check_autonomous_service() -> None:
             "stage_runtime_bundle",
             "restore_launch_agent",
             "_bootstrap_launch_agent",
-            "_LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 3",
+            "_LAUNCHCTL_BOOTSTRAP_ATTEMPTS = 7",
+            "_LAUNCHCTL_BOOTSTRAP_DELAY_MAX_SECONDS = 4.0",
         )
-    ) or not all(
+    ) or '"kickstart", "-k"' in service or not all(
         control in controller
         for control in (
             "capture_launch_agent",
