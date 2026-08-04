@@ -558,7 +558,7 @@ class AutonomousServiceTests(unittest.TestCase):
                 nonlocal bootstrap_attempts
                 if arguments[0] == "bootstrap":
                     bootstrap_attempts += 1
-                if arguments[0] == "bootstrap" and bootstrap_attempts <= 3:
+                if arguments[0] == "bootstrap" and bootstrap_attempts <= 7:
                     raise ServiceError("simulated bootstrap failure")
 
             with patch("founder_os.service.sys.platform", "darwin"), patch.object(
@@ -577,7 +577,7 @@ class AutonomousServiceTests(unittest.TestCase):
                         runtime_state_root=root / "state",
                     )
             restored = destination.read_bytes()
-        self.assertEqual(bootstrap_attempts, 4)
+        self.assertEqual(bootstrap_attempts, 8)
         self.assertEqual(restored, b"prior definition")
 
     def test_launch_agent_install_retries_transient_bootstrap_failures(self) -> None:
@@ -585,13 +585,16 @@ class AutonomousServiceTests(unittest.TestCase):
             root = Path(folder)
             repository, config = make_runtime_source(root)
             bootstrap_attempts = 0
+            calls: list[tuple[str, ...]] = []
+            delays: list[float] = []
 
             def launchctl(*arguments: str, **_: object) -> None:
                 nonlocal bootstrap_attempts
+                calls.append(arguments)
                 if arguments[0] != "bootstrap":
                     return
                 bootstrap_attempts += 1
-                if bootstrap_attempts < 3:
+                if bootstrap_attempts < 6:
                     raise ServiceError("simulated transient bootstrap failure")
 
             with patch("founder_os.service.sys.platform", "darwin"), patch.object(
@@ -600,7 +603,7 @@ class AutonomousServiceTests(unittest.TestCase):
                 "founder_os.service.launch_agent_status",
                 return_value=LaunchAgentStatus(False, None, "not loaded"),
             ), patch("founder_os.service._run_launchctl", side_effect=launchctl), patch(
-                "founder_os.service.time.sleep"
+                "founder_os.service.time.sleep", side_effect=delays.append
             ):
                 destination = install_launch_agent(
                     repository=repository,
@@ -609,7 +612,10 @@ class AutonomousServiceTests(unittest.TestCase):
                     runtime_state_root=root / "state",
                 )
             installed = destination.exists()
-        self.assertEqual(bootstrap_attempts, 3)
+        self.assertEqual(bootstrap_attempts, 6)
+        self.assertEqual(delays, [0.5, 1.0, 2.0, 4.0, 4.0])
+        self.assertIn(("kickstart", "gui/501/com.founderos.runtime"), calls)
+        self.assertNotIn(("kickstart", "-k", "gui/501/com.founderos.runtime"), calls)
         self.assertTrue(installed)
 
     def test_failed_readiness_rolls_back_runtime_then_emulator(self) -> None:
